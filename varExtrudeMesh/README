@@ -1,0 +1,2 @@
+This is a meshing tool which will read in a field called WallThickness from the 0 directory and extrude the wall patch by the stated distance at each point in the existing volume mesh.
+mapExtrudeDistance is useful in conjuction with this as it will map the extrusion distance from a .vtk file onto the wall patch of the volume mesh and write it to the 0 directory

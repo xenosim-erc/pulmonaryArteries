@@ -1,0 +1,40 @@
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      varExtrudeMeshDict;
+}
+
+// Generate a separate solid wall mesh from the actual fluid wall patch.
+// Since layer 0 is copied exactly, the resulting inner solid boundary is
+// conformal with the fluid wall boundary.
+constructFrom       patch;
+sourceCase          "../fluidMeshing";
+sourcePatches       (wall);
+
+// Stock patch-mode extrusion requires this to be an existing source patch.
+// It supplies patch information for the exposed surface in the new mesh.
+exposedPatchName    innerWall;
+
+// Point field in fluidExtrudeTest/0. It must be a pointScalarField with
+// dimensions of length. Each wall point value is its total extrusion depth.
+distanceField       WallThickness;
+
+// Fluid boundary normals normally point outward into the arterial wall.
+flipNormals         false;
+
+// The private utility uses this model for nLayers and sumThickness(), but
+// replaces its constant geometric thickness with distanceField at each point.
+extrudeModel        linearNormal;
+nLayers             3;
+expansionRatio      1.0;
+
+linearNormalCoeffs
+{
+    // Required by linearNormal's constructor but ignored as the total
+    // distance: WallThickness supplies the actual pointwise distance.
+    thickness       1;
+}
+
+mergeFaces          false;
+mergeTol            0;
