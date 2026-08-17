@@ -1,2 +1,211 @@
-This is a meshing tool which will read in a field called WallThickness from the 0 directory and extrude the wall patch by the stated distance at each point in the existing volume mesh.
-mapExtrudeDistance is useful in conjuction with this as it will map the extrusion distance from a .vtk file onto the wall patch of the volume mesh and write it to the 0 directory
+# varExtrudeMesh
+
+`varExtrudeMesh` is an OpenFOAM mesh-generation utility derived from
+`extrudeMesh`. It extrudes a mesh patch using a different total distance at
+each patch point. The distances are read from a `pointScalarField` in the
+source case, which makes the utility suitable for generating a solid wall of
+spatially varying thickness around a fluid domain.
+
+The original source patch is copied exactly to layer 0 of the generated mesh.
+Consequently, when `constructFrom patch` is used, the inner boundary of the
+new mesh is conformal with the source boundary.
+
+## How it works
+
+For each point on the selected source patch, the utility:
+
+1. reads the point's total extrusion distance from `distanceField`;
+2. calculates the point normal of the selected patch;
+3. creates `nLayers` points along that normal; and
+4. places each layer using the fractional thickness returned by the selected
+   OpenFOAM extrusion model.
+
+In simplified form, the position of layer `i` is
+
+```
+x_i = x_0 + f_i d(x_0) n(x_0)
+```
+
+where `d` is the value of the distance field, `n` is the patch-point normal,
+and `f_i` is `model.sumThickness(i)`. Thus, the point field controls the total
+local depth and the extrusion model controls how that depth is distributed
+between layers.
+
+All selected patch-point distances must be strictly positive and the field
+must have dimensions of length. The utility stops with a fatal error if
+either condition is violated.
+
+## Building
+
+Load an OpenFOAM environment that provides the OpenCFD/OpenFOAM libraries used
+by this source, then build with `wmake`:
+
+```sh
+cd varExtrudeMesh
+wmake
+```
+
+The executable is installed as:
+
+```text
+$FOAM_USER_APPBIN/varExtrudeMesh
+```
+
+The code is based on the OpenCFD `extrudeMesh` implementation (source headers
+through 2022). Small source or library changes may be required for other
+OpenFOAM releases or for the OpenFOAM Foundation distribution.
+
+## Case preparation
+
+The output case (the case from which `varExtrudeMesh` is run) needs:
+
+- `system/controlDict`;
+- `system/varExtrudeMeshDict`; and
+- a valid `constant` directory in which the generated mesh can be written.
+
+The source case needs:
+
+- a volume mesh in `constant/polyMesh`;
+- the patch or face zone named in the dictionary; and
+- the distance field in the source case's current time directory, normally
+  `0/<fieldName>`.
+
+The distance field must be a `pointScalarField` defined on **all points of the
+source volume mesh**, not merely a list of values for the selected patch. The
+utility maps the source mesh point indices to the local ordering of the
+extruded patch internally.
+
+For example, the field header should resemble:
+
+```foam
+FoamFile
+{
+    format      ascii;
+    class       pointScalarField;
+    object      WallThickness;
+}
+
+dimensions      [0 1 0 0 0 0 0];
+
+internalField   nonuniform List<scalar>
+<number-of-source-mesh-points>
+(
+    // one positive distance per mesh point
+);
+
+boundaryField
+{
+}
+```
+
+Use a field-mapping or preprocessing tool to generate this field from the
+desired thickness data. The related `mapExtrudeDistance` utility can be used
+to map distances from VTK data onto the source mesh.
+
+## Dictionary example
+
+Place the following in `system/varExtrudeMeshDict` in the output case:
+
+```foam
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      varExtrudeMeshDict;
+}
+
+constructFrom       patch;
+sourceCase          "../fluidMeshing";
+sourcePatches       (wall);
+
+// Must already be a patch in the source mesh. It becomes the exposed face
+// of the separately generated mesh.
+exposedPatchName    innerWall;
+
+distanceField       WallThickness;
+flipNormals         false;
+
+extrudeModel        linearNormal;
+nLayers             3;
+expansionRatio      1.0;
+
+linearNormalCoeffs
+{
+    // Required by linearNormal, but not used as the total extrusion depth.
+    // distanceField supplies the pointwise total depth instead.
+    thickness       1;
+}
+
+mergeFaces          false;
+mergeTol            0;
+```
+
+Important entries are:
+
+| Entry | Meaning |
+| --- | --- |
+| `constructFrom` | Source mode: `patch`, `mesh`, or `surface`. Variable-distance field handling is implemented for `patch` and `mesh` modes. |
+| `sourceCase` | Path to the case containing the source mesh and point field. |
+| `sourcePatches` | One or more source boundary patches. `sourceFaceZones` may be supplied instead. |
+| `exposedPatchName` | Existing source patch whose patch information is assigned to the outer face in `patch` mode. |
+| `distanceField` | Name of the source-case `pointScalarField` containing total extrusion depths. |
+| `flipNormals` | Reverse the extrusion direction. Supported for `patch`, but not `mesh`, mode. |
+| `extrudeModel` | OpenFOAM run-time extrusion model used to define the number and relative spacing of layers. |
+| `nLayers` | Number of extruded cell layers. |
+| `mergeTol` | Collapse edges shorter than this fraction of the generated mesh's minimum bounding-box dimension. Set to `0` to disable. |
+| `mergeFaces` | Stitch the front and back faces, where supported by the base `extrudeMesh` workflow. Not permitted in `mesh` mode. |
+
+The model's nominal thickness entry is still required by model construction,
+but the code replaces the model's absolute displacement with the value from
+`distanceField`. Model parameters that affect `sumThickness(i)`, such as a
+layer expansion ratio, still affect relative layer spacing.
+
+## Running
+
+From the output case directory, run:
+
+```sh
+varExtrudeMesh
+```
+
+To use a dictionary at another path:
+
+```sh
+varExtrudeMesh -dict system/myVarExtrudeMeshDict
+```
+
+A non-default region may be selected with OpenFOAM's standard `-region`
+option. Parallel execution follows the source utility's processor-case
+handling, so the source and output cases must be decomposed consistently.
+
+The generated mesh is written to the output case's `constant/polyMesh`. In
+`mesh` mode, the newly created cells are also written to the `addedCells`
+cellSet.
+
+After generation, inspect the reported minimum, maximum, and average extrusion
+distances, then validate the result:
+
+```sh
+checkMesh -allGeometry -allTopology
+```
+
+## Modes and limitations
+
+- `constructFrom patch` creates a separate extruded mesh and is the intended
+  mode for making a conformal variable-thickness solid wall.
+- `constructFrom mesh` adds the extruded cells to a copy of the source mesh.
+- `constructFrom surface` retains the stock `extrudeMesh` behavior and does
+  not read `distanceField`; its geometry is generated directly by the chosen
+  extrusion model.
+- Extrusion follows calculated point normals. Strong thickness gradients,
+  sharp corners, or locally large distances can produce skewed, inverted, or
+  self-intersecting cells. Always run `checkMesh` and inspect the result.
+- Every selected point must have a distance greater than OpenFOAM's `VSMALL`.
+- Edge collapsing is enabled when `mergeTol` is positive and can alter mesh
+  topology. Use `mergeTol 0` when exact point preservation is required.
+
+## License
+
+This utility is derived from OpenFOAM and is distributed under the GNU General
+Public License, version 3 or later. See the source-file headers for copyright
+and licensing details.

@@ -1,0 +1,4 @@
+variableDistance.C
+mapExtrudeDistance.C
+
+EXE = $(FOAM_USER_APPBIN)/mapExtrudeDistance
