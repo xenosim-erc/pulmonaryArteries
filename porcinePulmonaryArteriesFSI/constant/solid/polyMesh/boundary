@@ -1,0 +1,109 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2412                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       polyBoundaryMesh;
+    location    "constant/polyMesh";
+    object      boundary;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+14
+(
+    innerWall
+    {
+        type            wall;
+        inGroups        1(wall);
+        nFaces          23613;
+        startFace       187959;
+    }
+    outerWall
+    {
+        type            wall;
+        inGroups        1(wall);
+        nFaces          23613;
+        startFace       211572;
+    }
+    auto1
+    {
+        type            symmetry;
+        nFaces          78;
+        startFace       235185;
+    }
+    auto2
+    {
+        type            symmetry;
+        nFaces          120;
+        startFace       235263;
+    }
+    auto3
+    {
+        type            symmetry;
+        nFaces          96;
+        startFace       235383;
+    }
+    auto4
+    {
+        type            symmetry;
+        nFaces          90;
+        startFace       235479;
+    }
+    auto5
+    {
+        type            symmetry;
+        nFaces          186;
+        startFace       235569;
+    }
+    auto6
+    {
+        type            symmetry;
+        nFaces          84;
+        startFace       235755;
+    }
+    auto7
+    {
+        type            symmetry;
+        nFaces          54;
+        startFace       235839;
+    }
+    auto8
+    {
+        type            symmetry;
+        nFaces          24;
+        startFace       235893;
+    }
+    auto9
+    {
+        type            symmetry;
+        nFaces          84;
+        startFace       235917;
+    }
+    auto10
+    {
+        type            symmetry;
+        nFaces          48;
+        startFace       236001;
+    }
+    auto11
+    {
+        type            symmetry;
+        nFaces          144;
+        startFace       236049;
+    }
+    inlet
+    {
+        type            symmetry;
+        nFaces          378;
+        startFace       236193;
+    }
+)
+
+// ************************************************************************* //

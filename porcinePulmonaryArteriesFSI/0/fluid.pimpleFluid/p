@@ -1,0 +1,58 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| solids4foam: solid mechanics and fluid-solid interaction simulations        |
+| Version:     v2.3                                                           |
+| Web:         https://solids4foam.github.io                                  |
+| Disclaimer:  This offering is not approved or endorsed by OpenCFD Limited,  |
+|              producer and distributor of the OpenFOAM software via          |
+|              www.openfoam.com, and owner of the OPENFOAM® and OpenCFD®      |
+|              trade marks.                                                   |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+  processor
+    {
+      type processor;
+    }
+    "auto.*"
+    {
+      //type fixedValue;
+      //value uniform 1.26;
+           type        windkesselPressure;
+ 	   R           2.2e8;
+	   Rch         3.88e7;
+	   C           3.18e-9;
+	   rho         1060;  
+
+           value       uniform 0;
+    }
+    inlet
+    {
+      type zeroGradient;
+    }
+    "wall.*"
+    {
+        // Dirichlet-Neumann approach
+        type        movingWallPressure;
+        value       uniform 0;
+        // type       zeroGradient;
+
+        // Robin-Neumann condition approach
+        // type        elasticWallPressure;
+        // value       uniform 0;
+    }
+}
+
+// ************************************************************************* //

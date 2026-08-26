@@ -1,0 +1,6 @@
+FSI case of porcine pulmonary arteries
+The fluid and solid meshes contain ~100,000 cells each
+The meshes are conformal and the artery walls are created by extruding the fluid 5% of the artery diameter
+A neo-hookean constitutive law is considered for the solid
+The fluid is considered non-Newtonian and laminar
+The case can be run with the slurm script provided in parallel over 16 cores 
