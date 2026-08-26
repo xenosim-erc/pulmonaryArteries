@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Source tutorial run functions
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+# Example usage
+# ./Allrun
+# ./Allrun sonicLiquidFluid
+# ./Allrun robin
+
+# This case requires PETSc to be installed
+if [ -z "${PETSC_DIR}" ];
+then
+    echo; echo "Skipping this case as PETSc is not installed"
+    echo "Please set the PETSC_DIR variable"; echo
+    exit 0
+fi
+
+
+# Source solids4Foam scripts
+source solids4FoamScripts.sh
+
+# Check case version is correct
+solids4Foam::convertCaseFormat .
+
+# Check fvSolution for foundation version
+if [[ $WM_PROJECT = "OpenFOAM" ]] && [[ $WM_PROJECT_VERSION != *"v"* ]]
+then
+    if [[ -f "${CASE_DIR}"/system/fluid/fvSolution ]]
+    then
+        echo "OpenFOAM.org specific: replacing 'residualControl' with"
+        echo " 'outerCorrectorResidualControl' in system/fluid/fvSolution"
+        sed -i "s/residualControl/outerCorrectorResidualControl/g" \
+            "${CASE_DIR}"/system/fluid/fvSolution
+    fi
+fi
+
+### Decompose case
+solids4Foam::runApplication -s fluid decomposePar -region fluid #-copyZero
+solids4Foam::runApplication -s solid decomposePar -region solid #-copyZero
+
+### Run solver
+solids4Foam::runParallel solids4Foam
+#solids4Foam
+
+# Recompose case
+solids4Foam::runApplication -s fluid reconstructPar -region fluid
+solids4Foam::runApplication -s solid reconstructPar -region solid 

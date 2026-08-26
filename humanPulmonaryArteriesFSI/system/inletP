@@ -1,0 +1,13 @@
+
+type surfaceFieldValue;
+region fluid;
+libs (fieldFunctionObjects);
+
+enabled true;
+
+writeFields false;
+log true;
+regionType patch;
+name inlet;
+operation areaAverage;
+fields (p);

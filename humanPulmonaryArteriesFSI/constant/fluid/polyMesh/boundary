@@ -1,0 +1,101 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2412                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       polyBoundaryMesh;
+    location    "constant/polyMesh";
+    object      boundary;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+13
+(
+    wall
+    {
+        type            wall;
+        nFaces          33809;
+        startFace       495251;
+    }
+    auto1
+    {
+        type            patch;
+        nFaces          254;
+        startFace       529060;
+    }
+    auto2
+    {
+        type            patch;
+        nFaces          30;
+        startFace       529314;
+    }
+    auto3
+    {
+        type            patch;
+        nFaces          86;
+        startFace       529344;
+    }
+    auto4
+    {
+        type            patch;
+        nFaces          60;
+        startFace       529430;
+    }
+    auto5
+    {
+        type            patch;
+        nFaces          80;
+        startFace       529490;
+    }
+    auto6
+    {
+        type            patch;
+        nFaces          104;
+        startFace       529570;
+    }
+    auto7
+    {
+        type            patch;
+        nFaces          114;
+        startFace       529674;
+    }
+    auto8
+    {
+        type            patch;
+        nFaces          30;
+        startFace       529788;
+    }
+    auto9
+    {
+        type            patch;
+        nFaces          120;
+        startFace       529818;
+    }
+    auto10
+    {
+        type            patch;
+        nFaces          93;
+        startFace       529938;
+    }
+    inlet
+    {
+        type            patch;
+        nFaces          1556;
+        startFace       530031;
+    }
+    auto12
+    {
+        type            patch;
+        nFaces          378;
+        startFace       531587;
+    }
+)
+
+// ************************************************************************* //
