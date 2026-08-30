@@ -1,0 +1,150 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2412                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+libs            ("libwindkesselPressure.so");
+
+application     pimpleFoam;
+
+startFrom       latestTime;//startTime;//latestTime;//startTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         1.72;
+
+deltaT          5e-5;
+
+writeControl    runTime;
+
+writeInterval   0.02;
+
+adjustTimeStep yes;
+maxCo          15;
+maxDeltaT      2e-3;
+
+
+purgeWrite      0;
+
+writeFormat     ascii;
+
+writePrecision  6;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   6;
+
+runTimeModifiable true;
+
+fileHandler uncollated;
+
+functions
+{
+    // pPatch
+    // {
+    //   type patchAverage;
+    //   libs ("libfieldFunctionObjects.so");
+
+    //   patches (inlet auto3 auto4);
+
+    //     fields
+    //     (p);
+    // }
+
+  // yPlus
+  //   {
+  //     type yPlus;
+  //     libs (fieldFunctionObjects);
+  //   }
+
+
+
+  
+  pressureProbe
+     {
+       type probes;
+       libs (sampling);
+       
+       writeControl timeStep;
+       writeInterval 1;
+       
+       fields (p);
+       probeLocations
+	 (
+  	  (-0.025 0.025 0.09) //MPA
+	  (-0.0485 -0.0274 0.05406) //LPA
+	  (0.05798 -0.0334786 0.0306384) //RPA
+
+	  );
+     }
+   
+
+      //      courantNo
+      // {
+      // 	type CourantNo;
+      // 	libs (fieldFunctionObjects);
+
+      // 	// writeControl runTime;
+      // 	// writeInterval 0.02;
+	
+      // 	writeControl    runTime;
+      // 	writeInterval   0.02;
+
+      // }
+
+
+     wallShearStress1
+     {
+         // Mandatory entries
+         type            wallShearStress;
+         libs            (fieldFunctionObjects);
+         // Optional entries
+         patches         (wall);
+         writeFields     yes;
+
+         // Optional (inherited) entries
+         writePrecision  10;
+     	// writeControl    writeTime;
+         // writeInterval   -1;
+     	writeControl    runTime;
+     	writeInterval   0.02;
+
+     }
+
+     oscillatoryShearIndex1
+     {
+         // Mandatory entries
+         type            oscillatoryShearIndex;
+         libs            (oscillatoryShearIndex);
+
+         // Optional entries
+         patches         (wall);
+         writeFields     yes;
+
+         // Optional (inherited) entries
+         writePrecision  10;
+         // writeControl    writeTime;
+         // writeInterval   -1;
+     	writeControl    runTime;
+     	writeInterval   0.02;
+
+     }
+    
+}
+
+
+// ************************************************************************* //

@@ -1,0 +1,11 @@
+name: fsi-env
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+  - vmtk=1.5
+  - vtk-base=9.2.6
+  - libitk=5.3.*
+  - numpy=1.26
+  - scipy

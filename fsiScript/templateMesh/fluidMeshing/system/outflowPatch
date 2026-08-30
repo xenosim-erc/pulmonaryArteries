@@ -1,0 +1,12 @@
+
+type surfaceFieldValue;
+libs (fieldFunctionObjects);
+writeControl writeTime;
+writeFields false;
+
+regionType patch;
+name auto11;
+operation sum;
+
+fields  (phi);
+

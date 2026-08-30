@@ -83,6 +83,11 @@ SunOS*Gcc*/
 # python-compile
 *.pyc
 
+# fsiScript local dependencies and generated cases
+/fsiScript/.env/
+/fsiScript/caseFiles/
+/fsiScript/run/
+
 # other stuff
 .build
 .hgignore

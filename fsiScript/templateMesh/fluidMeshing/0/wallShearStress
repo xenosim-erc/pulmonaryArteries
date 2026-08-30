@@ -1,0 +1,298 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2412                                  |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    arch        "LSB;label=32;scalar=64";
+    class       volVectorField;
+    location    "0";
+    object      wallShearStress;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    inlet
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto1
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto2
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto3
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto4
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto5
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto6
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto7
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto8
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto9
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto10
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto11
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto12
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto13
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto14
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto15
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto16
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto17
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto18
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto19
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto20
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto21
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto22
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto23
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto24
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto25
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto26
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto27
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto28
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto29
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto30
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto31
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto32
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto33
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto34
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto35
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto36
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto37
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto38
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto39
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto40
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto41
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto42
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto43
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto44
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto45
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto46
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto47
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto48
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto49
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto50
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto51
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    wall
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+    auto53
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+}
+
+
+// ************************************************************************* //

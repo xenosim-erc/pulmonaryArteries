@@ -1,0 +1,17 @@
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     varExtrudeMesh;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         1;
+deltaT          1;
+writeControl    timeStep;
+writeInterval   1;
+runTimeModifiable false;
+
