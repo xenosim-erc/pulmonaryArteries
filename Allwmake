@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+# Builds the repository's OpenFOAM utilities and provisions the fsiScript
+# Python/VMTK environment, so the FSI/CFD cases and the fsiScript meshing
+# workflow are runnable from a fresh clone.
+#
+# A working OpenFOAM and solids4foam installation must already be sourced;
+# this script does not install either. It only:
+#   1. builds mapExtrudeDistance and varExtrudeMesh with wmake;
+#   2. installs a local Miniforge and creates fsiScript's fsi-env conda
+#      environment (VMTK/VTK/ITK) from fsiScript/environment.yml.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "==> Checking OpenFOAM environment"
+if [[ -z "${WM_PROJECT_DIR:-}" ]]; then
+    cat >&2 <<'EOF'
+Error: no OpenFOAM environment is sourced (WM_PROJECT_DIR is unset).
+Source an OpenFOAM installation's etc/bashrc before running Allwmake, e.g.:
+  source /usr/lib/openfoam/openfoam2412/etc/bashrc
+EOF
+    exit 1
+fi
+if ! command -v wmake >/dev/null 2>&1; then
+    echo "Error: wmake not found on PATH though WM_PROJECT_DIR is set ($WM_PROJECT_DIR)." >&2
+    exit 1
+fi
+
+echo "==> Checking solids4Foam"
+missing_solids4foam=()
+command -v solids4Foam >/dev/null 2>&1 || missing_solids4foam+=("solids4Foam")
+command -v solids4FoamScripts.sh >/dev/null 2>&1 || missing_solids4foam+=("solids4FoamScripts.sh")
+if (( ${#missing_solids4foam[@]} > 0 )); then
+    cat >&2 <<EOF
+Error: solids4foam does not appear to be on PATH (missing: ${missing_solids4foam[*]}).
+Install solids4foam (https://solids4foam.github.io) and source its
+etc/bashrc, or otherwise add its bin directory to PATH, before running
+Allwmake.
+EOF
+    exit 1
+fi
+
+echo "==> Checking cfMesh (required at run time by fsiScript/meshing.sh)"
+missing_cfmesh=()
+for util in surfaceFeatureEdges cartesianMesh autoPatch; do
+    command -v "$util" >/dev/null 2>&1 || missing_cfmesh+=("$util")
+done
+if (( ${#missing_cfmesh[@]} > 0 )); then
+    echo "Warning: cfMesh utilities not found on PATH: ${missing_cfmesh[*]}" >&2
+    echo "         fsiScript/meshing.sh will fail until cfMesh (https://cfmesh.com/) is installed and on PATH." >&2
+fi
+
+echo "==> Building mapExtrudeDistance"
+( cd "$SCRIPT_DIR/mapExtrudeDistance" && wmake )
+
+echo "==> Building varExtrudeMesh"
+( cd "$SCRIPT_DIR/varExtrudeMesh" && wmake )
+
+# ----------------------------------------------------------------------------
+# fsiScript Python/VMTK environment
+# ----------------------------------------------------------------------------
+
+ENV_ROOT="$SCRIPT_DIR/fsiScript/.env"
+MINIFORGE_DIR="$ENV_ROOT/miniforge3"
+FSI_ENV_DIR="$ENV_ROOT/fsi-env"
+ENVIRONMENT_YML="$SCRIPT_DIR/fsiScript/environment.yml"
+
+if [[ -x "$MINIFORGE_DIR/bin/conda" ]]; then
+    echo "==> Miniforge already installed at $MINIFORGE_DIR"
+else
+    echo "==> Installing Miniforge to $MINIFORGE_DIR"
+    mkdir -p "$ENV_ROOT"
+
+    os="$(uname -s)"
+    arch="$(uname -m)"
+    installer_name="Miniforge3-${os}-${arch}.sh"
+    installer_path="$ENV_ROOT/$installer_name"
+    installer_url="https://github.com/conda-forge/miniforge/releases/latest/download/$installer_name"
+
+    if [[ -s "$installer_path" ]]; then
+        echo "Using cached installer: $installer_path"
+    elif command -v curl >/dev/null 2>&1; then
+        echo "Downloading $installer_url"
+        curl -fsSL -o "$installer_path" "$installer_url"
+    elif command -v wget >/dev/null 2>&1; then
+        echo "Downloading $installer_url"
+        wget -qO "$installer_path" "$installer_url"
+    else
+        echo "Error: neither curl nor wget is available to download Miniforge." >&2
+        echo "Install one of them, or install Miniforge/conda manually to $MINIFORGE_DIR." >&2
+        exit 1
+    fi
+
+    bash "$installer_path" -b -p "$MINIFORGE_DIR"
+    rm -f "$installer_path"
+fi
+
+CONDA_EXE="$MINIFORGE_DIR/bin/conda"
+if [[ -x "$MINIFORGE_DIR/bin/mamba" ]]; then
+    SOLVER_EXE="$MINIFORGE_DIR/bin/mamba"
+else
+    SOLVER_EXE="$CONDA_EXE"
+fi
+
+if [[ -x "$FSI_ENV_DIR/bin/python" ]]; then
+    echo "==> fsi-env already exists at $FSI_ENV_DIR; skipping"
+else
+    echo "==> Creating fsi-env from $ENVIRONMENT_YML"
+    "$SOLVER_EXE" env create --prefix "$FSI_ENV_DIR" --file "$ENVIRONMENT_YML"
+fi
+
+echo
+echo "Allwmake finished successfully."
+echo "  - mapExtrudeDistance and varExtrudeMesh installed to \$FOAM_USER_APPBIN"
+echo "  - fsiScript Python environment ready at: $FSI_ENV_DIR"
+if (( ${#missing_cfmesh[@]} > 0 )); then
+    echo "  - Warning: cfMesh utilities missing from PATH: ${missing_cfmesh[*]}"
+fi
