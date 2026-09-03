@@ -47,12 +47,30 @@ use. The FSI cases each include a `caseExplainer` file summarising the setup.
 ## Requirements
 
 - An OpenFOAM installation (tested with OpenFOAM v2412) and
-  [solids4foam](https://solids4foam.github.io) for the FSI cases.
+  [solids4foam](https://solids4foam.github.io) for the FSI cases, sourced
+  before running `Allwmake` or any case.
 - PETSc (`PETSC_DIR` set) for FSI cases using the Robin-Neumann coupling
   formulation.
-- [cfMesh](https://cfmesh.com/) for the CFD cases (`PAH.fms` surfaces).
-- The Python/VMTK environment described in `fsiScript/README.md`, for
-  generating new cases from an artery STL.
+- [cfMesh](https://cfmesh.com/) for the CFD cases (`PAH.fms` surfaces) and
+  for the fsiScript meshing workflow.
+- Internet access the first time `Allwmake` is run, to download Miniforge and
+  the fsi-env conda packages (VMTK/VTK/ITK).
+
+## Quick start
+
+With a working OpenFOAM and solids4foam environment sourced, from this
+directory:
+
+```bash
+./Allwmake
+```
+
+This builds `mapExtrudeDistance` and `varExtrudeMesh` with `wmake`, and
+provisions the fsiScript Python/VMTK environment (installing a local
+Miniforge to `fsiScript/.env/miniforge3` and creating the `fsi-env` conda
+environment from `fsiScript/environment.yml`, if not already present). It
+does not install OpenFOAM, solids4foam, or cfMesh — see `fsiScript/README.md`
+for details on the fsi-env environment it creates.
 
 ## License
 
