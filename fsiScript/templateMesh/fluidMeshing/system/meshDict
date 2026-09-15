@@ -36,28 +36,6 @@ maxCellSize 1;
    	minFirstLayerThickness 0.5;
    }
 
-objectRefinements
-{
-    refinementBox1
-    {
-        type        box;
-        cellSize    0.8;
-        centre      (104 70 39);
-        lengthX     8;
-        lengthY     16;
-        lengthZ     8;
-    }
-
-     refinementBox2
-     {
-         type        box;
-         cellSize    .8;
-         centre      (96 43 31);
-         lengthX     8;
-         lengthY     7;
-         lengthZ     8;
-     }
-}
 
 
                

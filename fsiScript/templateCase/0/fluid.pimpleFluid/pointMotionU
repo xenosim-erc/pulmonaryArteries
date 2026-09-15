@@ -27,14 +27,20 @@ boundaryField
       type processor;
     }
   
+    // The wall is driven by the FSI coupling, and these patches share their rim
+    // points with it. Holding them at fixedValue pins the interior of each
+    // outlet plane while its rim is dragged by the moving wall, which shears the
+    // adjacent cells. slip lets the points slide within their own plane instead,
+    // matching what the solid already does for pointD. It relies on the patches
+    // being planar, which the flow extensions guarantee.
     "auto.*"
     {
-        type         fixedValue;
+        type         slip;
         value        uniform (0 0 0);
     }
     inlet
     {
-        type         fixedValue;
+        type         slip;
         value        uniform (0 0 0);
     }
     "wall.*"

@@ -154,13 +154,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gaussian-sigma",
         type=nonnegative_float,
-        default=5.0,
+        default=10.0,
         help="diameter smoothing sigma in model units; 0 disables smoothing",
     )
     parser.add_argument(
         "--extrusion-percentage",
         type=percentage,
-        default=8.0,
+        default=5.0,
         help="wall thickness as a percentage of local smoothed diameter",
     )
     return parser.parse_args()

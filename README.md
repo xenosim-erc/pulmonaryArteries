@@ -1,9 +1,9 @@
 # pulmonaryArteries
 
 OpenFOAM/solids4foam simulation cases and supporting tools for modelling
-haemodynamics in the pulmonary arteries, including rigid-wall CFD and coupled
-fluid-structure interaction (FSI) between healthy and pulmonary
-arterial hypertension (PAH) geometries, across human and porcine anatomies.
+haemodynamics in the pulmonary arteries, using coupled fluid-structure
+interaction (FSI) between healthy and pulmonary arterial hypertension (PAH)
+geometries, across human and porcine anatomies.
 
 ## Repository layout
 
@@ -16,10 +16,6 @@ arterial hypertension (PAH) geometries, across human and porcine anatomies.
   `solids4Foam`; see `run.slurm`.
 - **`porcinePulmonaryArteriesFSI/`** — Equivalent FSI case for porcine
   pulmonary arteries, same meshing and modelling approach.
-- **`healthyArteryCFD/`** — Rigid-wall CFD case (`pimpleFoam`) for a healthy
-  pulmonary artery geometry, meshed with cfMesh from `PAH.fms`.
-- **`hypertensiveArteryCFD/`** — Rigid-wall CFD case for a hypertensive
-  (PAH) pulmonary artery geometry, for comparison against the healthy case.
 
 Each case directory follows standard OpenFOAM structure (`0/`, `constant/`,
 `system/`, `Allrun`) plus a Slurm submission script (`run.slurm`) for cluster
@@ -51,8 +47,7 @@ use. The FSI cases each include a `caseExplainer` file summarising the setup.
   before running `Allwmake` or any case.
 - PETSc (`PETSC_DIR` set) for FSI cases using the Robin-Neumann coupling
   formulation.
-- [cfMesh](https://cfmesh.com/) for the CFD cases (`PAH.fms` surfaces) and
-  for the fsiScript meshing workflow.
+- [cfMesh](https://cfmesh.com/) for the fsiScript meshing workflow.
 - Internet access the first time `Allwmake` is run, to download Miniforge and
   the fsi-env conda packages (VMTK/VTK/ITK).
 

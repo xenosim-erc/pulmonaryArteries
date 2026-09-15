@@ -9,13 +9,17 @@ and preparation.  VMTK's Python bindings perform the centerline extraction.
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import sys
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Sequence
 
+import numpy as np
+import scipy.sparse as sp
 import vtk
+from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
 
 Point = tuple[float, float, float]
@@ -30,7 +34,11 @@ def read_stl(filename: Path) -> vtk.vtkPolyData:
     return reader.GetOutput()
 
 
-def prepare_surface(surface: vtk.vtkPolyData) -> vtk.vtkPolyData:
+def prepare_surface(
+    surface: vtk.vtkPolyData,
+    smoothing_iterations: int = 20,
+    pass_band: float = 0.05,
+) -> vtk.vtkPolyData:
     clean = vtk.vtkCleanPolyData()
     clean.SetInputData(surface)
     clean.PointMergingOn()
@@ -42,8 +50,31 @@ def prepare_surface(surface: vtk.vtkPolyData) -> vtk.vtkPolyData:
     triangles.PassVertsOff()
     triangles.Update()
 
+    # Segmentation-derived surfaces carry staircase artefacts whose curvature is
+    # far higher than anything anatomical. A point-normal offset folds wherever
+    # the wall thickness exceeds the local concave radius of curvature, so this
+    # noise seeds self-intersections in the extruded solid. Windowed-sinc
+    # (Taubin) smoothing removes it without the shrinkage of a plain Laplacian.
+    #
+    # Boundary smoothing must stay off: moving the open rims would warp the
+    # inlet and outlet profiles that later become fluid patches and the solid's
+    # planar symmetry rings. Smoothing precedes the normals filter so the
+    # normals describe the final geometry.
+    upstream = triangles
+    if smoothing_iterations > 0:
+        smoother = vtk.vtkWindowedSincPolyDataFilter()
+        smoother.SetInputConnection(triangles.GetOutputPort())
+        smoother.SetNumberOfIterations(smoothing_iterations)
+        smoother.SetPassBand(pass_band)
+        smoother.BoundarySmoothingOff()
+        smoother.FeatureEdgeSmoothingOff()
+        smoother.NonManifoldSmoothingOn()
+        smoother.NormalizeCoordinatesOn()
+        smoother.Update()
+        upstream = smoother
+
     normals = vtk.vtkPolyDataNormals()
-    normals.SetInputConnection(triangles.GetOutputPort())
+    normals.SetInputConnection(upstream.GetOutputPort())
     normals.ConsistencyOn()
     normals.AutoOrientNormalsOn()
     normals.SplittingOff()
@@ -124,17 +155,285 @@ def profile_area_and_centroid(points: Sequence[Point]) -> tuple[float, Point]:
     return area, centroid  # type: ignore[return-value]
 
 
-def cap_surface_vtk(surface: vtk.vtkPolyData) -> vtk.vtkPolyData:
-    fill = vtk.vtkFillHolesFilter()
-    fill.SetInputData(surface)
-    fill.SetHoleSize(sys.float_info.max)
-    fill.Update()
+def _point_adjacency(surface: vtk.vtkPolyData):
+    """Unit-weight point adjacency of a triangulated surface, and its degree."""
+    polygons = vtk_to_numpy(surface.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+    edges = np.vstack(
+        [polygons[:, [0, 1]], polygons[:, [1, 2]], polygons[:, [2, 0]]]
+    )
+    count = surface.GetNumberOfPoints()
+    adjacency = sp.coo_matrix(
+        (np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(count, count)
+    )
+    adjacency = (adjacency + adjacency.T).tocsr()
+    adjacency.data[:] = 1.0
+    degree = np.maximum(np.asarray(adjacency.sum(1)).ravel(), 1.0)
+    return adjacency, degree
+
+
+def _smooth_scalar(adjacency, degree, values, passes, relaxation=0.5):
+    for _ in range(passes):
+        values = (1.0 - relaxation) * values + relaxation * (adjacency @ values) / degree
+    return values
+
+
+def _dilate_scalar(adjacency, values, passes):
+    """Grow a mask by repeated neighbourhood maximum."""
+    for _ in range(passes):
+        values = np.maximum(
+            values,
+            np.asarray(
+                sp.csr_matrix(adjacency.multiply(values[None, :])).max(axis=1).todense()
+            ).ravel(),
+        )
+    return values
+
+
+def _minimum_principal_curvature(surface: vtk.vtkPolyData) -> np.ndarray:
+    """Most concave principal curvature at every point."""
+    gaussian = vtk.vtkCurvatures()
+    gaussian.SetInputData(surface)
+    gaussian.SetCurvatureTypeToGaussian()
+    gaussian.Update()
+    mean = vtk.vtkCurvatures()
+    mean.SetInputData(surface)
+    mean.SetCurvatureTypeToMean()
+    mean.Update()
+    K = vtk_to_numpy(gaussian.GetOutput().GetPointData().GetArray("Gauss_Curvature"))
+    H = vtk_to_numpy(mean.GetOutput().GetPointData().GetArray("Mean_Curvature"))
+    return H - np.sqrt(np.maximum(H * H - K, 0.0))
+
+
+def centerline_branch_arrays(centerlines: vtk.vtkPolyData):
+    """Per-point centerline coordinates, radii, branch index and arc length.
+
+    This mirrors the traversal in centerlines_to_csv.py so the diameters used
+    here are the same ones Gauss.py will later turn into wall thickness.
+    """
+    radius_array = centerlines.GetPointData().GetArray("MaximumInscribedSphereRadius")
+    if radius_array is None:
+        raise RuntimeError(
+            "Centerlines are missing the MaximumInscribedSphereRadius array"
+        )
+
+    coordinates: list[Point] = []
+    radii: list[float] = []
+    branches: list[int] = []
+    distances: list[float] = []
+
+    lines = centerlines.GetLines()
+    lines.InitTraversal()
+    point_ids = vtk.vtkIdList()
+    branch = 0
+    while lines.GetNextCell(point_ids):
+        distance = 0.0
+        previous: Point | None = None
+        for index in range(point_ids.GetNumberOfIds()):
+            point_id = point_ids.GetId(index)
+            point = centerlines.GetPoint(point_id)
+            if previous is not None:
+                distance += math.dist(previous, point)
+            coordinates.append(point)
+            radii.append(radius_array.GetTuple1(point_id))
+            branches.append(branch)
+            distances.append(distance)
+            previous = point
+        branch += 1
+
+    return (
+        np.asarray(coordinates, dtype=float),
+        np.asarray(radii, dtype=float),
+        np.asarray(branches, dtype=int),
+        np.asarray(distances, dtype=float),
+    )
+
+
+def local_wall_thickness(
+    surface: vtk.vtkPolyData,
+    centerlines: vtk.vtkPolyData,
+    extrusion_percentage: float,
+    gaussian_sigma: float,
+) -> np.ndarray:
+    """Wall thickness that will later be extruded at each surface point.
+
+    Gauss.py's own smoothing and nearest-centerline mapping are reused so the
+    threshold here matches the thickness that is actually extruded.
+    """
+    from scipy.spatial import cKDTree
+
+    from Gauss import smooth_diameters
+
+    points, radii, branches, distances = centerline_branch_arrays(centerlines)
+    smoothed = smooth_diameters(2.0 * radii, branches, distances, gaussian_sigma)
+    surface_points = vtk_to_numpy(surface.GetPoints().GetData())
+    _, nearest = cKDTree(points).query(surface_points)
+    return smoothed[nearest] * (extrusion_percentage / 100.0)
+
+
+def smooth_saddles(
+    surface: vtk.vtkPolyData,
+    target_radius,
+    dilation: int = 3,
+    outer_iterations: int = 20,
+) -> tuple[vtk.vtkPolyData, float]:
+    """Round only the concave saddles until their radius of curvature grows.
+
+    A point-normal offset folds where the wall thickness exceeds the local
+    concave radius of curvature, and on a vessel tree that happens almost
+    exclusively in the bifurcation crotches. Global smoothing cannot fix this
+    without deforming the whole anatomy, so this smooths only the points whose
+    concave radius is below target_radius, with the region grown and feathered
+    so the correction blends into untouched surface. It is the automated form
+    of filleting the crotches by hand.
+
+    target_radius is either one value for the whole surface or an array with
+    one value per surface point, which lets the threshold follow the wall
+    thickness that will actually be extruded there.
+
+    Open-profile rim points are held fixed. Returns the smoothed surface and
+    the fraction of points that were moved appreciably.
+    """
+    working = vtk.vtkPolyData()
+    working.DeepCopy(surface)
+    adjacency, degree = _point_adjacency(working)
+    original = vtk_to_numpy(working.GetPoints().GetData()).copy()
+
+    # The rims bound the fluid patches and the solid's planar symmetry rings.
+    pinned = np.zeros(working.GetNumberOfPoints(), dtype=bool)
+    edges = vtk.vtkFeatureEdges()
+    edges.SetInputData(working)
+    edges.BoundaryEdgesOn()
+    edges.FeatureEdgesOff()
+    edges.NonManifoldEdgesOff()
+    edges.ManifoldEdgesOff()
+    edges.Update()
+    locator = vtk.vtkPointLocator()
+    locator.SetDataSet(working)
+    locator.BuildLocator()
+    rim = edges.GetOutput()
+    for i in range(rim.GetNumberOfPoints()):
+        pinned[locator.FindClosestPoint(rim.GetPoint(i))] = True
+
+    for _ in range(outer_iterations):
+        curvature = _smooth_scalar(
+            adjacency, degree, _minimum_principal_curvature(working), 3
+        )
+        radius = np.where(
+            curvature < 0.0, 1.0 / np.maximum(np.abs(curvature), 1e-9), np.inf
+        )
+        target = np.maximum(np.asarray(target_radius, dtype=float), 1e-9)
+        weight = np.clip((target - radius) / target, 0.0, 1.0)
+        weight = _dilate_scalar(adjacency, weight, dilation)
+        weight = _smooth_scalar(adjacency, degree, weight, 5)
+        weight[pinned] = 0.0
+
+        points = vtk_to_numpy(working.GetPoints().GetData())
+        for _ in range(10):
+            points = points + 0.6 * weight[:, None] * (
+                (adjacency @ points) / degree[:, None] - points
+            )
+        working.GetPoints().SetData(numpy_to_vtk(points, deep=True))
+        working.Modified()
+
+    moved = np.linalg.norm(
+        vtk_to_numpy(working.GetPoints().GetData()) - original, axis=1
+    )
+    return working, float((moved > 0.02).sum()) / len(moved)
+
+
+def import_vmtk():
+    """Import VMTK's VTK bindings with an actionable error message."""
+    try:
+        from vmtk import vtkvmtk
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "VMTK and its compatible shared libraries are required. Run this "
+            "script with the Python executable from the project Conda "
+            "environment. Original import error: " + str(exc)
+        ) from exc
+    return vtkvmtk
+
+
+def extend_profiles(
+    surface: vtk.vtkPolyData,
+    centerlines: vtk.vtkPolyData,
+    extension_diameters: float,
+) -> vtk.vtkPolyData:
+    """Add straight flow extensions of the given length to every open profile.
+
+    Each extension follows the local centerline direction and terminates in a
+    circular, planar rim. This makes capping exact, moves the inlet and outlet
+    boundary conditions off the bifurcations, and gives the extruded solid end
+    rings that are genuinely planar and normal to the vessel axis, as the
+    symmetry patches assigned to them require.
+    """
+    vtkvmtk = import_vmtk()
+
+    extensions = vtkvmtk.vtkvmtkPolyDataFlowExtensionsFilter()
+    extensions.SetInputData(surface)
+    extensions.SetCenterlines(centerlines)
+
+    # Extend along the vessel axis rather than the rim normal: on an obliquely
+    # cut profile the rim normal is itself oblique.
+    extensions.SetExtensionModeToUseCenterlineDirection()
+    extensions.SetInterpolationModeToThinPlateSpline()
+
+    # With adaptive length the extension is ExtensionRatio times the profile's
+    # mean radius, so one diameter corresponds to a ratio of two.
+    extensions.SetAdaptiveExtensionLength(1)
+    extensions.SetAdaptiveExtensionRadius(1)
+    extensions.SetAdaptiveNumberOfBoundaryPoints(0)
+    extensions.SetExtensionRatio(2.0 * extension_diameters)
+    extensions.SetTransitionRatio(0.5)
+    extensions.SetCenterlineNormalEstimationDistanceRatio(1.0)
+    extensions.SetNumberOfBoundaryPoints(50)
+    extensions.SetSigma(1.0)
+    extensions.Update()
+
+    output = vtk.vtkPolyData()
+    output.DeepCopy(extensions.GetOutput())
+    if output.GetNumberOfCells() == 0:
+        raise RuntimeError("Flow extension produced an empty surface.")
+    return output
+
+
+def cap_surface(surface: vtk.vtkPolyData) -> vtk.vtkPolyData:
+    """Close every open profile with a triangle fan around a new centre point.
+
+    vtkFillHolesFilter, used previously, ear-clips the rim without adding a
+    centre vertex and so produces slivers that survive into the cfMesh surface.
+    """
+    vtkvmtk = import_vmtk()
+
+    capper = vtkvmtk.vtkvmtkCapPolyData()
+    capper.SetInputData(surface)
+    capper.SetDisplacement(0.0)
+    capper.SetInPlaneDisplacement(0.0)
+    capper.Update()
+
     triangles = vtk.vtkTriangleFilter()
-    triangles.SetInputConnection(fill.GetOutputPort())
+    triangles.SetInputConnection(capper.GetOutputPort())
     triangles.Update()
     output = vtk.vtkPolyData()
     output.DeepCopy(triangles.GetOutput())
     return output
+
+
+def write_profiles_csv(profiles, filename: Path) -> None:
+    """Record each open profile's size and centre for the meshing stage.
+
+    These are the rims of the surface that is actually meshed, so with flow
+    extensions enabled they are the extended rims, not the original ones.
+    """
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    with filename.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["index", "area", "radius", "x", "y", "z"])
+        for index, (area, centroid) in enumerate(profiles):
+            radius = math.sqrt(area / math.pi) if area > 0.0 else 0.0
+            writer.writerow(
+                [index, area, radius, centroid[0], centroid[1], centroid[2]]
+            )
 
 
 def write_vtp(surface: vtk.vtkPolyData, filename: Path) -> None:
@@ -161,14 +460,7 @@ def write_stl(surface: vtk.vtkPolyData, filename: Path) -> None:
 def compute_centerlines(
     surface: vtk.vtkPolyData, profiles: Sequence[tuple[float, Point]]
 ) -> vtk.vtkPolyData:
-    try:
-        from vmtk import vtkvmtk
-    except (ImportError, OSError) as exc:
-        raise RuntimeError(
-            "VMTK and its compatible shared libraries are required for "
-            "centerlines. Run this script with the Python executable from the "
-            "project Conda environment. Original import error: " + str(exc)
-        ) from exc
+    vtkvmtk = import_vmtk()
 
     # VMTK caps with a new point at each profile centre. These points make
     # stable source/target seeds and avoid interactive endpoint selection.
@@ -233,7 +525,66 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-centerlines",
         action="store_true",
-        help="write surfaces without requiring VMTK",
+        help="skip centerline extraction, and with it the flow extensions",
+    )
+    parser.add_argument(
+        "--smoothing-iterations",
+        type=int,
+        default=20,
+        help="windowed-sinc surface smoothing iterations; 0 disables smoothing",
+    )
+    parser.add_argument(
+        "--smoothing-passband",
+        type=float,
+        default=0.05,
+        help="windowed-sinc pass band; lower smooths more (default: 0.05)",
+    )
+    parser.add_argument(
+        "--no-saddle-smoothing",
+        action="store_true",
+        help="do not round concave saddles at all",
+    )
+    parser.add_argument(
+        "--saddle-safety-factor",
+        type=float,
+        default=0.6,
+        help=(
+            "a saddle is rounded until its concave radius reaches the local wall "
+            "thickness divided by this factor (default: 0.6)"
+        ),
+    )
+    parser.add_argument(
+        "--saddle-target-radius",
+        type=float,
+        default=0.0,
+        help=(
+            "override the thickness-derived target with one fixed radius, in "
+            "model units; 0 keeps the local thickness-derived target"
+        ),
+    )
+    parser.add_argument(
+        "--gaussian-sigma",
+        type=float,
+        default=10.0,
+        help="diameter smoothing sigma, matching Gauss.py, for the saddle target",
+    )
+    parser.add_argument(
+        "--extrusion-percentage",
+        type=float,
+        default=5.0,
+        help="wall thickness as a percentage of diameter, matching Gauss.py",
+    )
+    parser.add_argument(
+        "--saddle-dilation",
+        type=int,
+        default=3,
+        help="rings by which the saddle region is grown before feathering",
+    )
+    parser.add_argument(
+        "--extension-diameters",
+        type=float,
+        default=1.0,
+        help="flow-extension length per profile, in local diameters; 0 disables",
     )
     return parser.parse_args()
 
@@ -246,32 +597,97 @@ def main() -> int:
     output_dir = (args.output_dir or input_path.parent).expanduser().resolve()
     prefix = args.prefix or input_path.stem
 
-    uncapped = prepare_surface(read_stl(input_path))
+    uncapped = prepare_surface(
+        read_stl(input_path),
+        smoothing_iterations=args.smoothing_iterations,
+        pass_band=args.smoothing_passband,
+    )
+    if args.smoothing_iterations > 0:
+        print(
+            f"Smoothed the surface: {args.smoothing_iterations} windowed-sinc "
+            f"iterations at pass band {args.smoothing_passband:g}"
+        )
+
     profiles = [profile_area_and_centroid(loop) for loop in boundary_loops(uncapped)]
     if len(profiles) < 2:
         raise RuntimeError(
             f"Expected at least two open boundaries, but found {len(profiles)}."
         )
-    capped = cap_surface_vtk(uncapped)
-
-    uncapped_path = output_dir / f"{prefix}_uncapped.vtp"
-    capped_path = output_dir / f"{prefix}_capped.stl"
-    write_vtp(uncapped, uncapped_path)
-    write_stl(capped, capped_path)
 
     source_index = max(range(len(profiles)), key=lambda i: profiles[i][0])
     print(f"Detected {len(profiles)} open profiles")
     for i, (area, centroid) in enumerate(profiles):
         role = "SOURCE (largest)" if i == source_index else "target"
         print(f"  {i}: area={area:.8g}, centre={centroid}, {role}")
-    print(f"Wrote {uncapped_path}")
-    print(f"Wrote {capped_path}")
 
+    # Centerlines describe the original anatomy, so they are extracted before
+    # the profiles are extended. They also supply the extension directions.
+    # Surface points on an extension map to the nearest centerline endpoint,
+    # which carries a constant diameter along the straight extension.
+    centerlines = None
+    centerlines_path = output_dir / f"{prefix}_centerlines.vtp"
     if not args.skip_centerlines:
         centerlines = compute_centerlines(uncapped, profiles)
-        centerlines_path = output_dir / f"{prefix}_centerlines.vtp"
         write_vtp(centerlines, centerlines_path)
         print(f"Wrote {centerlines_path}")
+
+    # Round the concave saddles now that the centerlines are available: the
+    # threshold at each point is the wall thickness that will be extruded
+    # there, divided by the safety factor. Because this moves the surface, the
+    # centerlines are re-extracted afterwards so every downstream diameter
+    # describes the geometry that is actually meshed.
+    if centerlines is not None and not args.no_saddle_smoothing:
+        if args.saddle_target_radius > 0.0:
+            target = args.saddle_target_radius
+            description = f"a fixed radius of {target:g}"
+        else:
+            thickness = local_wall_thickness(
+                uncapped, centerlines, args.extrusion_percentage, args.gaussian_sigma
+            )
+            target = thickness / args.saddle_safety_factor
+            description = (
+                f"the local wall thickness / {args.saddle_safety_factor:g} "
+                f"(target radius {target.min():.3g} to {target.max():.3g})"
+            )
+
+        uncapped, touched = smooth_saddles(uncapped, target, args.saddle_dilation)
+        print(
+            f"Rounded concave saddles to {description}: "
+            f"{100.0 * touched:.2f}% of the surface was moved"
+        )
+
+        if touched > 0.0:
+            centerlines = compute_centerlines(uncapped, profiles)
+            write_vtp(centerlines, centerlines_path)
+            print(f"Re-extracted centerlines on the rounded surface")
+    elif not args.no_saddle_smoothing:
+        print("Skipping saddle smoothing because centerlines were not extracted.")
+
+    if centerlines is not None and args.extension_diameters > 0.0:
+        uncapped = extend_profiles(uncapped, centerlines, args.extension_diameters)
+        print(
+            f"Extended every profile by {args.extension_diameters:g} diameter(s)"
+        )
+    elif args.extension_diameters > 0.0:
+        print("Skipping flow extensions because centerlines were not extracted.")
+
+    # Re-measure the rims: with flow extensions these are the extended profiles,
+    # which is where the caps and therefore the outlet patches end up.
+    final_profiles = [
+        profile_area_and_centroid(loop) for loop in boundary_loops(uncapped)
+    ]
+    profiles_path = output_dir / f"{prefix}_profiles.csv"
+    write_profiles_csv(final_profiles, profiles_path)
+    print(f"Wrote {profiles_path}")
+
+    capped = cap_surface(uncapped)
+
+    uncapped_path = output_dir / f"{prefix}_uncapped.vtp"
+    capped_path = output_dir / f"{prefix}_capped.stl"
+    write_vtp(uncapped, uncapped_path)
+    write_stl(capped, capped_path)
+    print(f"Wrote {uncapped_path}")
+    print(f"Wrote {capped_path}")
     return 0
 
 

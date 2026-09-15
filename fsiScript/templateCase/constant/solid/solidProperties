@@ -36,11 +36,8 @@ solidModel     nonLinearGeometryTotalLagrangianTotalDisplacement;
 
     stabilisation
     {
-                  type        RhieChow;
-            //type        alpha;
-            scaleFactor 0.5;
 
-      D
+      momentum
         {
             type        RhieChow;
             //type        alpha;

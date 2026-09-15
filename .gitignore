@@ -86,6 +86,14 @@ SunOS*Gcc*/
 # fsiScript local dependencies and generated cases
 /fsiScript/.env/
 
+# Intermediate meshing output and assembled solver cases are generated locally
+# and are large; ignore their contents but keep the directories themselves, via
+# the tracked placeholder file in each.
+/fsiScript/caseFiles/*
+!/fsiScript/caseFiles/.ignorethisfile
+/fsiScript/run/*
+!/fsiScript/run/.ignorethisfile
+
 
 # other stuff
 .build

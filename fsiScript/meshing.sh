@@ -14,6 +14,7 @@ CENTERLINE_SCRIPT="$SCRIPT_DIR/pythonScripts/pulmonary_centerlines.py"
 CSV_SCRIPT="$SCRIPT_DIR/pythonScripts/centerlines_to_csv.py"
 GAUSS_SCRIPT="$SCRIPT_DIR/pythonScripts/Gauss.py"
 EMPTY_PATCH_SCRIPT="$SCRIPT_DIR/pythonScripts/add_empty_boundary_patch.py"
+REFINEMENT_SCRIPT="$SCRIPT_DIR/pythonScripts/add_refinements.py"
 TEMPLATE_MESH_DIR="$SCRIPT_DIR/templateMesh"
 TEMPLATE_CASE_DIR="$SCRIPT_DIR/templateCase"
 RUN_DIR="$SCRIPT_DIR/run"
@@ -72,6 +73,11 @@ if [[ ! -f "$EMPTY_PATCH_SCRIPT" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$REFINEMENT_SCRIPT" ]]; then
+    echo "Error: refinement script not found: $REFINEMENT_SCRIPT" >&2
+    exit 1
+fi
+
 if [[ ! -d "$TEMPLATE_MESH_DIR" ]]; then
     echo "Error: mesh template directory not found: $TEMPLATE_MESH_DIR" >&2
     exit 1
@@ -97,11 +103,30 @@ for required_utility in \
     fi
 done
 
+# Run one meshing utility inside its case directory with all of its output
+# captured in a log file, printing only a short description of the step. The
+# log is named in the error message so a failure can still be diagnosed.
+run_step() {
+    local description="$1" work_dir="$2" log_name="$3"
+    shift 3
+    echo "$description"
+    if ! ( cd "$work_dir" && "$@" > "$log_name" 2>&1 ); then
+        echo "Error: step failed: $description" >&2
+        echo "See $work_dir/$log_name" >&2
+        exit 1
+    fi
+}
+
 # At least the input STL positional argument is required. Exit status 2 denotes
 # invalid command-line usage.
 if [[ $# -eq 0 ]]; then
     echo "Usage: $0 INPUT.stl [--gaussian-sigma VALUE] [--extrusion-percentage VALUE]" >&2
     echo "       [--output-dir DIR] [--prefix NAME] [--skip-centerlines]" >&2
+    echo "       [--smoothing-iterations N] [--smoothing-passband VALUE]" >&2
+    echo "       [--extension-diameters VALUE] [--no-saddle-smoothing]" >&2
+    echo "       [--saddle-safety-factor VALUE] [--saddle-target-radius VALUE]" >&2
+    echo "       [--saddle-dilation N] [--cells-per-radius VALUE]" >&2
+    echo "       [--sphere-radius-factor VALUE]" >&2
     exit 2
 fi
 
@@ -118,6 +143,8 @@ output_dir=""
 skip_centerlines=false
 gaussian_sigma=""
 extrusion_percentage=""
+cells_per_radius="3.0"
+sphere_radius_factor="4.0"
 
 # Read the output-related options without removing them from the array that is
 # passed to pulmonary_centerlines.py. Both --option value and --option=value
@@ -172,6 +199,28 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --extrusion-percentage=*)
             extrusion_percentage="${argument#*=}"
             ;;
+        --cells-per-radius)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --cells-per-radius requires a value" >&2
+                exit 2
+            }
+            cells_per_radius="${arguments[$index]}"
+            ;;
+        --cells-per-radius=*)
+            cells_per_radius="${argument#*=}"
+            ;;
+        --sphere-radius-factor)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --sphere-radius-factor requires a value" >&2
+                exit 2
+            }
+            sphere_radius_factor="${arguments[$index]}"
+            ;;
+        --sphere-radius-factor=*)
+            sphere_radius_factor="${argument#*=}"
+            ;;
     esac
 done
 
@@ -182,38 +231,47 @@ done
 if [[ "$skip_centerlines" == false ]]; then
     if [[ -z "$gaussian_sigma" ]]; then
         if [[ -t 0 ]]; then
-            read -r -p "Gaussian smoothing sigma [5.0]: " gaussian_sigma
+            read -r -p "Gaussian smoothing sigma [10.0]: " gaussian_sigma
         fi
-        gaussian_sigma="${gaussian_sigma:-5.0}"
+        gaussian_sigma="${gaussian_sigma:-10.0}"
     fi
 
     if [[ -z "$extrusion_percentage" ]]; then
         if [[ -t 0 ]]; then
-            read -r -p "Extrusion percentage [8.0]: " extrusion_percentage
+            read -r -p "Extrusion percentage [5.0]: " extrusion_percentage
         fi
-        extrusion_percentage="${extrusion_percentage:-8.0}"
+        extrusion_percentage="${extrusion_percentage:-5.0}"
     fi
 
     echo "Gaussian smoothing sigma: $gaussian_sigma"
     echo "Extrusion percentage: $extrusion_percentage%"
 fi
 
-# Gaussian and extrusion options belong to Gauss.py, not to the geometry CLI.
-# Remove them while retaining every option understood by pulmonary_centerlines.py.
+# Both stages need the Gaussian and extrusion options: Gauss.py turns them into
+# the wall thickness, and pulmonary_centerlines.py uses the same numbers to set
+# the saddle-rounding target. Strip whichever form the caller used, then append
+# the resolved values once, so an interactively entered value is passed on too.
 geometry_arguments=("${arguments[0]}")
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --gaussian-sigma|--extrusion-percentage)
+        --gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor)
             index=$((index + 1))
             ;;
-        --gaussian-sigma=*|--extrusion-percentage=*)
+        --gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*)
             ;;
         *)
             geometry_arguments+=("$argument")
             ;;
     esac
 done
+
+if [[ "$skip_centerlines" == false ]]; then
+    geometry_arguments+=(
+        --gaussian-sigma "$gaussian_sigma"
+        --extrusion-percentage "$extrusion_percentage"
+    )
+fi
 
 # With no explicit output directory, derive the case name from the first
 # argument (the input STL). For example, artery.stl becomes:
@@ -238,8 +296,17 @@ echo "Output directory: $output_dir"
 # cannot inject an incompatible Python package or shared VTK library. Setting
 # PYTHONNOUSERSITE also prevents packages under ~/.local from overriding the
 # tested Conda packages. These changes do not alter the caller's shell.
+mkdir -p "$output_dir"
+geometry_log="$output_dir/log.geometry"
 env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
-    "$FSI_PYTHON" "$CENTERLINE_SCRIPT" "${geometry_arguments[@]}"
+    "$FSI_PYTHON" "$CENTERLINE_SCRIPT" "${geometry_arguments[@]}" 2>&1 \
+    | tee "$geometry_log"
+
+# The patch check below compares what autoPatch finds against the number of
+# open profiles this stage reported.
+profile_count="$(sed -n 's/^Detected \([0-9][0-9]*\) open profiles$/\1/p' \
+    "$geometry_log" | head -1)"
+profile_count="${profile_count:-0}"
 
 # Populate the generated case with the reusable OpenFOAM/cfMesh template. The
 # trailing '/.' copies the contents, producing fluidMeshing and varExtrudeFunc
@@ -265,7 +332,8 @@ if [[ ! -f "$mesh_dict" ]]; then
 fi
 
 mkdir -p "$surface_dir"
-"$SURFACE_FEATURE_EDGES" "$capped_stl" "$fms_path"
+run_step "Extracting surface feature edges..." "$surface_dir" \
+    log.surfaceFeatureEdges "$SURFACE_FEATURE_EDGES" "$capped_stl" "$fms_path"
 if [[ ! -s "$fms_path" ]]; then
     echo "Error: surfaceFeatureEdges did not create a non-empty FMS file: $fms_path" >&2
     exit 1
@@ -288,27 +356,31 @@ echo "Copied mesh template to: $output_dir"
 echo "Wrote cfMesh surface: $fms_path"
 echo "Updated mesh dictionary: $mesh_dict"
 
+# Size a refinement sphere for every outlet that is only a few cells across.
+# Without this an outlet cap merges into the vessel wall during autoPatch.
+profiles_csv="$output_dir/${output_prefix}_profiles.csv"
+if [[ -f "$profiles_csv" ]]; then
+    "$FSI_PYTHON" "$REFINEMENT_SCRIPT" "$mesh_dict" "$profiles_csv" \
+        --cells-per-radius "$cells_per_radius" \
+        --sphere-radius-factor "$sphere_radius_factor"
+else
+    echo "Warning: no profile table at $profiles_csv; meshDict refinements unchanged" >&2
+fi
+
 # Generate and validate the fluid volume mesh from within its OpenFOAM case.
-# tee keeps complete logs in the case while also reporting progress and the
-# checkMesh assessment to the user running this script.
+# Each utility's full output goes to its own log in the case directory; only a
+# one-line description of the step is printed.
 fluid_case="$output_dir/fluidMeshing"
-(
-    cd "$fluid_case"
-    "$CARTESIAN_MESH" 2>&1 | tee log.cartesianMesh
-)
-(
-    cd "$fluid_case"
-    "$CHECK_MESH" -allTopology -allGeometry 2>&1 | tee log.checkMesh
-)
-echo "checkMesh report saved to: $fluid_case/log.checkMesh"
+run_step "Meshing the fluid..." "$fluid_case" log.cartesianMesh "$CARTESIAN_MESH"
+run_step "Checking the fluid mesh..." "$fluid_case" log.checkMesh \
+    "$CHECK_MESH" -allTopology -allGeometry
+echo "  checkMesh report: $fluid_case/log.checkMesh"
 
 # Preview automatic surface segmentation at a 50-degree feature angle. Without
 # -overwrite, autoPatch writes a new time so the original mesh remains intact
 # while the user reviews the detected patch count and sizes.
-(
-    cd "$fluid_case"
-    "$AUTO_PATCH" 50 2>&1 | tee log.autoPatch.preview
-)
+run_step "Detecting boundary patches..." "$fluid_case" log.autoPatch.preview \
+    "$AUTO_PATCH" 50
 preview_time="$(cd "$fluid_case" && "$FOAM_LIST_TIMES" -latestTime -noZero)"
 preview_boundary="$fluid_case/$preview_time/polyMesh/boundary"
 if [[ -z "$preview_time" || ! -f "$preview_boundary" ]]; then
@@ -336,12 +408,32 @@ if (( ${#preview_patches[@]} < 2 )); then
     exit 1
 fi
 
-echo "autoPatch 50 detected ${#preview_patches[@]} patches:"
-printf '  %-32s %s\n' "Patch" "Faces"
+# Write the full patch table to a file and report only the counts. One patch
+# is expected per open profile, plus the vessel wall itself.
+patch_table="$fluid_case/log.patches"
+{
+    printf '%-32s %s\n' "Patch" "Faces"
+    for patch_entry in "${preview_patches[@]}"; do
+        read -r patch_name patch_faces <<< "$patch_entry"
+        printf '%-32s %s\n' "$patch_name" "$patch_faces"
+    done
+} > "$patch_table"
+
+nonzero_patches=0
 for patch_entry in "${preview_patches[@]}"; do
     read -r patch_name patch_faces <<< "$patch_entry"
-    printf '  %-32s %s\n' "$patch_name" "$patch_faces"
+    if (( patch_faces > 0 )); then
+        nonzero_patches=$((nonzero_patches + 1))
+    fi
 done
+
+if (( profile_count > 0 )); then
+    expected_patches=$((profile_count + 1))
+    echo "Found $nonzero_patches patches with faces; expected $expected_patches ($profile_count open profiles + 1 wall)."
+else
+    echo "Found $nonzero_patches patches with faces."
+fi
+echo "  Patch sizes: $patch_table"
 
 if [[ ! -t 0 ]]; then
     echo "Error: patch confirmation requires an interactive terminal." >&2
@@ -360,11 +452,9 @@ esac
 
 # Remove the preview time and apply the accepted segmentation to the constant
 # mesh. This deliberately follows the reviewed preview with the same angle.
-(
-    cd "$fluid_case"
-    "$FOAM_LIST_TIMES" -rm
-    "$AUTO_PATCH" 50 -overwrite 2>&1 | tee log.autoPatch
-)
+( cd "$fluid_case" && "$FOAM_LIST_TIMES" -rm > log.foamListTimes 2>&1 )
+run_step "Applying patch segmentation..." "$fluid_case" log.autoPatch \
+    "$AUTO_PATCH" 50 -overwrite
 
 boundary_file="$fluid_case/constant/polyMesh/boundary"
 mapfile -t ranked_patches < <(patch_sizes "$boundary_file" | sort -k2,2nr)
@@ -407,11 +497,8 @@ patches
 );
 EOF
 } > "$generated_patch_dict"
-(
-    cd "$fluid_case"
-    "$CREATE_PATCH" -overwrite -dict system/autoPatchCreatePatchDict \
-        2>&1 | tee log.createPatch
-)
+run_step "Naming the fluid patches..." "$fluid_case" log.createPatch \
+    "$CREATE_PATCH" -overwrite -dict system/autoPatchCreatePatchDict
 "$FSI_PYTHON" "$EMPTY_PATCH_SCRIPT" "$boundary_file" outerWall wall
 
 # Confirm both the declared patch count and the exact zero-face entry were
@@ -455,21 +542,18 @@ if [[ "$skip_centerlines" == false ]]; then
     # extrusion stage.
     thick_map="$fluid_case/thickMap.vtk"
     mv -f "$thickness_vtk" "$thick_map"
-    (
-        cd "$fluid_case"
-        "$MAP_EXTRUDE_DISTANCE" 2>&1 | tee log.mapExtrudeDistance
-    )
-    echo "Mapped wall thickness from: $thick_map"
-    echo "mapExtrudeDistance log saved to: $fluid_case/log.mapExtrudeDistance"
+    run_step "Mapping wall thickness onto the fluid wall..." "$fluid_case" \
+        log.mapExtrudeDistance "$MAP_EXTRUDE_DISTANCE"
+    echo "  Mapped from: $thick_map"
+    echo "  mapExtrudeDistance log: $fluid_case/log.mapExtrudeDistance"
 
     # Extrude the mapped fluid wall into a separate conformal solid mesh. The
     # varExtrudeFunc dictionary reads ../fluidMeshing/0/WallThickness and uses
     # the temporary zero-face outerWall patch for the exposed-patch metadata.
     solid_case="$output_dir/varExtrudeFunc"
-    (
-        cd "$solid_case"
-        "$VAR_EXTRUDE_MESH" 2>&1 | tee log.varExtrudeMesh
-    )
+    run_step "Extruding the solid wall..." "$solid_case" log.varExtrudeMesh \
+        "$VAR_EXTRUDE_MESH"
+    echo "  varExtrudeMesh log: $solid_case/log.varExtrudeMesh"
 
     # varExtrudeMesh no longer needs the temporary zero-face patch. Running
     # createPatch with an empty operation list removes empty patches while
@@ -488,11 +572,9 @@ pointSync false;
 patches ();
 EOF
     } > "$fluid_cleanup_dict"
-    (
-        cd "$fluid_case"
-        "$CREATE_PATCH" -overwrite -dict system/removeEmptyPatchesDict \
-            2>&1 | tee log.removeEmptyPatches
-    )
+    run_step "Removing the temporary fluid patch..." "$fluid_case" \
+        log.removeEmptyPatches "$CREATE_PATCH" -overwrite \
+        -dict system/removeEmptyPatchesDict
 
     # On the extruded solid, the old outerWall is the conformal fluid-facing
     # surface and the old wall is the exterior surface. Rename both. The inlet
@@ -551,11 +633,8 @@ EOF
 );
 EOF
     } > "$solid_patch_dict"
-    (
-        cd "$solid_case"
-        "$CREATE_PATCH" -overwrite -dict system/solidCreatePatchDict \
-            2>&1 | tee log.createPatch
-    )
+    run_step "Naming the solid patches..." "$solid_case" log.createPatch \
+        "$CREATE_PATCH" -overwrite -dict system/solidCreatePatchDict
 
     # Restore the public inlet and auto patch names in a second pass. Their
     # source patches are already symmetry patches, and explicitly repeating the
@@ -594,11 +673,9 @@ EOF
 );
 EOF
     } > "$solid_symmetry_dict"
-    (
-        cd "$solid_case"
-        "$CREATE_PATCH" -overwrite -dict system/solidSymmetryPatchDict \
-            2>&1 | tee log.createPatch.symmetry
-    )
+    run_step "Setting the solid end patches to symmetry..." "$solid_case" \
+        log.createPatch.symmetry "$CREATE_PATCH" -overwrite \
+        -dict system/solidSymmetryPatchDict
 
     expected_symmetry_count=$((1 + ${#solid_auto_patch_names[@]}))
     verified_symmetry_count="$(awk '
