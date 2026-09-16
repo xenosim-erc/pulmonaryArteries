@@ -34,6 +34,47 @@ def read_stl(filename: Path) -> vtk.vtkPolyData:
     return reader.GetOutput()
 
 
+def fill_small_holes(
+    surface: vtk.vtkPolyData, minimum_radius: float
+) -> tuple[vtk.vtkPolyData, int]:
+    """Close open boundaries too small to be a vessel outlet.
+
+    Every open boundary is otherwise promoted to an inlet or outlet: it is
+    capped, patched, flow-extended and refined. A pinhole left by a scan defect
+    or by a repair tool is therefore treated as a vessel, which both miscounts
+    the outlets and asks the mesher for cells orders of magnitude below the
+    global size. Holes below minimum_radius are filled into the wall instead.
+    """
+    if minimum_radius <= 0.0:
+        return surface, 0
+
+    before = len(boundary_loops(surface))
+    fill = vtk.vtkFillHolesFilter()
+    fill.SetInputData(surface)
+    fill.SetHoleSize(minimum_radius)
+    fill.Update()
+
+    triangles = vtk.vtkTriangleFilter()
+    triangles.SetInputConnection(fill.GetOutputPort())
+    triangles.PassLinesOff()
+    triangles.PassVertsOff()
+    triangles.Update()
+
+    # This now runs after prepare_surface's own normals pass, so the lid's
+    # winding has to be made consistent here. Splitting stays off to preserve
+    # the point count.
+    normals = vtk.vtkPolyDataNormals()
+    normals.SetInputConnection(triangles.GetOutputPort())
+    normals.ConsistencyOn()
+    normals.AutoOrientNormalsOn()
+    normals.SplittingOff()
+    normals.Update()
+
+    output = vtk.vtkPolyData()
+    output.DeepCopy(normals.GetOutput())
+    return output, before - len(boundary_loops(output))
+
+
 def prepare_surface(
     surface: vtk.vtkPolyData,
     smoothing_iterations: int = 20,
@@ -270,6 +311,38 @@ def local_wall_thickness(
     return smoothed[nearest] * (extrusion_percentage / 100.0)
 
 
+def _surface_triangles(surface: vtk.vtkPolyData) -> np.ndarray:
+    """Triangle connectivity of the surface, in its own point numbering."""
+    filter_ = vtk.vtkTriangleFilter()
+    filter_.SetInputData(surface)
+    filter_.PassLinesOff()
+    filter_.PassVertsOff()
+    filter_.Update()
+    mesh = filter_.GetOutput()
+    if mesh.GetNumberOfPoints() != surface.GetNumberOfPoints():
+        raise RuntimeError("triangulation changed the surface point count")
+    return vtk_to_numpy(mesh.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+
+
+def _triangle_areas(triangles: np.ndarray, points: np.ndarray) -> np.ndarray:
+    a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
+    return 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+
+
+def _collapsing_triangles(
+    triangles: np.ndarray, initial_areas: np.ndarray, candidate: np.ndarray
+) -> np.ndarray:
+    """Triangles that candidate would shrink far below their starting area.
+
+    The comparison is against the area before any smoothing, not the previous
+    pass: a per-pass limit still permits unbounded collapse once it is applied a
+    few hundred times.
+    """
+    return _triangle_areas(triangles, candidate) < 0.25 * np.maximum(
+        initial_areas, 1e-30
+    )
+
+
 def smooth_saddles(
     surface: vtk.vtkPolyData,
     target_radius,
@@ -296,7 +369,9 @@ def smooth_saddles(
     working = vtk.vtkPolyData()
     working.DeepCopy(surface)
     adjacency, degree = _point_adjacency(working)
+    triangles = _surface_triangles(working)
     original = vtk_to_numpy(working.GetPoints().GetData()).copy()
+    initial_areas = _triangle_areas(triangles, original)
 
     # The rims bound the fluid patches and the solid's planar symmetry rings.
     pinned = np.zeros(working.GetNumberOfPoints(), dtype=bool)
@@ -329,9 +404,21 @@ def smooth_saddles(
 
         points = vtk_to_numpy(working.GetPoints().GetData())
         for _ in range(10):
-            points = points + 0.6 * weight[:, None] * (
+            candidate = points + 0.6 * weight[:, None] * (
                 (adjacency @ points) / degree[:, None] - points
             )
+
+            # Hold back any point whose movement would collapse one of its
+            # triangles. Smoothing can drive three points collinear while every
+            # edge stays long, and a zero-area triangle has no usable normal
+            # exactly where the extrusion needs one; it also makes the thickness
+            # map unprojectable onto the wall patch.
+            collapsing = _collapsing_triangles(triangles, initial_areas, candidate)
+            if collapsing.any():
+                frozen = np.zeros(len(points), dtype=bool)
+                frozen[triangles[collapsing].ravel()] = True
+                candidate[frozen] = points[frozen]
+            points = candidate
         working.GetPoints().SetData(numpy_to_vtk(points, deep=True))
         working.Modified()
 
@@ -358,6 +445,7 @@ def extend_profiles(
     surface: vtk.vtkPolyData,
     centerlines: vtk.vtkPolyData,
     extension_diameters: float,
+    transition_ratio: float = 0.8,
 ) -> vtk.vtkPolyData:
     """Add straight flow extensions of the given length to every open profile.
 
@@ -384,14 +472,32 @@ def extend_profiles(
     extensions.SetAdaptiveExtensionRadius(1)
     extensions.SetAdaptiveNumberOfBoundaryPoints(0)
     extensions.SetExtensionRatio(2.0 * extension_diameters)
-    extensions.SetTransitionRatio(0.5)
+    # Fraction of the extension over which the real, generally non-circular
+    # profile is blended into the circular rim. A short extension needs a large
+    # value: at 0.5 the blend happens over half an already-halved length, which
+    # on a large irregular profile such as the main pulmonary artery leaves a
+    # crease sharp enough to fold the solid extrusion.
+    extensions.SetTransitionRatio(transition_ratio)
     extensions.SetCenterlineNormalEstimationDistanceRatio(1.0)
     extensions.SetNumberOfBoundaryPoints(50)
     extensions.SetSigma(1.0)
     extensions.Update()
 
+    # The extension filter emits triangles whose winding does not follow the
+    # surface it was given, which leaves pairs of neighbouring triangles with
+    # opposing normals. Nothing downstream re-orients them: prepare_surface runs
+    # before this stage. Left alone they reach cfMesh as apparent creases and
+    # end up as warped, incorrectly oriented faces in the extruded solid.
+    # Splitting must stay off so the point count is preserved.
+    normals = vtk.vtkPolyDataNormals()
+    normals.SetInputConnection(extensions.GetOutputPort())
+    normals.ConsistencyOn()
+    normals.AutoOrientNormalsOn()
+    normals.SplittingOff()
+    normals.Update()
+
     output = vtk.vtkPolyData()
-    output.DeepCopy(extensions.GetOutput())
+    output.DeepCopy(normals.GetOutput())
     if output.GetNumberOfCells() == 0:
         raise RuntimeError("Flow extension produced an empty surface.")
     return output
@@ -528,6 +634,25 @@ def parse_args() -> argparse.Namespace:
         help="skip centerline extraction, and with it the flow extensions",
     )
     parser.add_argument(
+        "--extension-transition-ratio",
+        type=float,
+        default=0.8,
+        help=(
+            "fraction of each flow extension used to blend the real profile "
+            "into its circular rim (default: 0.8)"
+        ),
+    )
+    parser.add_argument(
+        "--minimum-profile-radius",
+        type=float,
+        default=1.0,
+        help=(
+            "open boundaries smaller than this radius, in model units, are "
+            "treated as surface defects and filled rather than being taken for "
+            "vessel outlets; 0 keeps every hole"
+        ),
+    )
+    parser.add_argument(
         "--smoothing-iterations",
         type=int,
         default=20,
@@ -583,7 +708,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extension-diameters",
         type=float,
-        default=1.0,
+        default=0.5,
         help="flow-extension length per profile, in local diameters; 0 disables",
     )
     return parser.parse_args()
@@ -602,6 +727,17 @@ def main() -> int:
         smoothing_iterations=args.smoothing_iterations,
         pass_band=args.smoothing_passband,
     )
+
+    # Fill after smoothing, not before. BoundarySmoothingOff protects the points
+    # of an open rim, but once a pinhole is closed its lid is ordinary interior
+    # surface, and since the hole is smaller than one triangle the smoothing
+    # collapses that lid to zero area.
+    uncapped, filled = fill_small_holes(uncapped, args.minimum_profile_radius)
+    if filled:
+        print(
+            f"Filled {filled} open boundary/boundaries smaller than "
+            f"{args.minimum_profile_radius:g}: too small to be a vessel outlet"
+        )
     if args.smoothing_iterations > 0:
         print(
             f"Smoothed the surface: {args.smoothing_iterations} windowed-sinc "
@@ -664,7 +800,12 @@ def main() -> int:
         print("Skipping saddle smoothing because centerlines were not extracted.")
 
     if centerlines is not None and args.extension_diameters > 0.0:
-        uncapped = extend_profiles(uncapped, centerlines, args.extension_diameters)
+        uncapped = extend_profiles(
+            uncapped,
+            centerlines,
+            args.extension_diameters,
+            args.extension_transition_ratio,
+        )
         print(
             f"Extended every profile by {args.extension_diameters:g} diameter(s)"
         )

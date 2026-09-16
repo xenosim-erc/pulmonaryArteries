@@ -127,6 +127,8 @@ if [[ $# -eq 0 ]]; then
     echo "       [--saddle-safety-factor VALUE] [--saddle-target-radius VALUE]" >&2
     echo "       [--saddle-dilation N] [--cells-per-radius VALUE]" >&2
     echo "       [--sphere-radius-factor VALUE]" >&2
+    echo "       [--thickness-smoothing-passes N] [--refine-narrow-vessels]" >&2
+    echo "       [--max-mapping-distance VALUE]" >&2
     exit 2
 fi
 
@@ -145,6 +147,14 @@ gaussian_sigma=""
 extrusion_percentage=""
 cells_per_radius="3.0"
 sphere_radius_factor="4.0"
+thickness_smoothing_passes="10"
+refine_narrow_vessels=false
+# mapExtrudeDistance aborts if any wall point is further than this from the
+# thickness-map surface. Its own default of 0.2 is far tighter than a 1 mm mesh
+# warrants: cfMesh snapping leaves a handful of rim points a few tenths of a
+# millimetre out, which is harmless because the thickness field is smooth there.
+# This stays small enough to still catch a units or geometry mismatch.
+max_mapping_distance="1.0"
 
 # Read the output-related options without removing them from the array that is
 # passed to pulmonary_centerlines.py. Both --option value and --option=value
@@ -221,6 +231,31 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --sphere-radius-factor=*)
             sphere_radius_factor="${argument#*=}"
             ;;
+        --thickness-smoothing-passes)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --thickness-smoothing-passes requires a value" >&2
+                exit 2
+            }
+            thickness_smoothing_passes="${arguments[$index]}"
+            ;;
+        --thickness-smoothing-passes=*)
+            thickness_smoothing_passes="${argument#*=}"
+            ;;
+        --refine-narrow-vessels)
+            refine_narrow_vessels=true
+            ;;
+        --max-mapping-distance)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --max-mapping-distance requires a value" >&2
+                exit 2
+            }
+            max_mapping_distance="${arguments[$index]}"
+            ;;
+        --max-mapping-distance=*)
+            max_mapping_distance="${argument#*=}"
+            ;;
     esac
 done
 
@@ -255,10 +290,12 @@ geometry_arguments=("${arguments[0]}")
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor)
+        --refine-narrow-vessels)
+            ;;
+        --gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance)
             index=$((index + 1))
             ;;
-        --gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*)
+        --gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*)
             ;;
         *)
             geometry_arguments+=("$argument")
@@ -359,10 +396,19 @@ echo "Updated mesh dictionary: $mesh_dict"
 # Size a refinement sphere for every outlet that is only a few cells across.
 # Without this an outlet cap merges into the vessel wall during autoPatch.
 profiles_csv="$output_dir/${output_prefix}_profiles.csv"
+centerlines_vtp="$output_dir/${output_prefix}_centerlines.vtp"
+refinement_options=(--cells-per-radius "$cells_per_radius"
+                    --sphere-radius-factor "$sphere_radius_factor")
+
+# Narrow-vessel cone refinement is off unless asked for: the refinement-level
+# transitions it puts on the wall patch damage the extruded solid more than the
+# faceting it removes.
+if [[ "$refine_narrow_vessels" == true && -f "$centerlines_vtp" ]]; then
+    refinement_options+=(--centerlines "$centerlines_vtp")
+fi
 if [[ -f "$profiles_csv" ]]; then
     "$FSI_PYTHON" "$REFINEMENT_SCRIPT" "$mesh_dict" "$profiles_csv" \
-        --cells-per-radius "$cells_per_radius" \
-        --sphere-radius-factor "$sphere_radius_factor"
+        "${refinement_options[@]}"
 else
     echo "Warning: no profile table at $profiles_csv; meshDict refinements unchanged" >&2
 fi
@@ -535,7 +581,8 @@ if [[ "$skip_centerlines" == false ]]; then
         "$FSI_PYTHON" "$GAUSS_SCRIPT" \
         "$uncapped_vtp" "$centerline_csv" "$thickness_vtk" \
         --gaussian-sigma "$gaussian_sigma" \
-        --extrusion-percentage "$extrusion_percentage"
+        --extrusion-percentage "$extrusion_percentage" \
+        --thickness-smoothing-passes "$thickness_smoothing_passes"
 
     # mapExtrudeDistance reads thickMap.vtk from the current OpenFOAM case by
     # default and writes the pointScalarField 0/WallThickness for the wall
@@ -543,7 +590,8 @@ if [[ "$skip_centerlines" == false ]]; then
     thick_map="$fluid_case/thickMap.vtk"
     mv -f "$thickness_vtk" "$thick_map"
     run_step "Mapping wall thickness onto the fluid wall..." "$fluid_case" \
-        log.mapExtrudeDistance "$MAP_EXTRUDE_DISTANCE"
+        log.mapExtrudeDistance "$MAP_EXTRUDE_DISTANCE" \
+        -maxDistance "$max_mapping_distance"
     echo "  Mapped from: $thick_map"
     echo "  mapExtrudeDistance log: $fluid_case/log.mapExtrudeDistance"
 

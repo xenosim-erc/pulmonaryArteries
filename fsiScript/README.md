@@ -39,13 +39,94 @@ mesh with self-intersecting cells and one that passes `checkMesh`. Pass
 `--no-saddle-smoothing` to disable it, or `--saddle-target-radius` to override
 the per-point target with a single fixed radius.
 
+### Why the solid mesh is fragile
+
+The solid wall is built by offsetting every point of the fluid wall along its own
+normal (`varExtrudeMesh`). That single operation is the source of nearly every
+defect seen in the solid mesh, and it fails in three distinct ways:
+
+- **Concave folding.** Where the wall thickness exceeds the local concave radius
+  of curvature the offset self-intersects. This happens almost only in the
+  bifurcation crotches, and is what the saddle rounding below addresses.
+- **Convex creases.** A sharp ridge is offset along one averaged normal, which
+  stretches rather than folds the outer surface. It produces warped and
+  incorrectly oriented faces with positive cell volumes, so `checkMesh` reports
+  face-pyramid and concave-cell errors while the volume checks pass.
+- **A stepped offset distance.** If the thickness changes abruptly between
+  neighbouring points, adjacent extruded cells get different heights and twist.
+
+Diagnosing these means looking at the right quantity. `Min volume` catches only
+the first. The second shows up as face-pyramid orientation errors, and its cause
+is visible as the dihedral angle between neighbouring wall triangles, not as
+principal curvature: a crease is a curvature singularity that a point-based
+curvature estimator smooths away and under-reports.
+
+A useful check on any suspect surface is the distribution of dihedral angles.
+Values above 120 degrees almost always mean inconsistent triangle winding rather
+than real geometry, since two neighbours wound in opposite directions read as an
+almost 180 degree fold; genuine creases sit between roughly 45 and 90 degrees.
+
+### Wall thickness
+
+`Gauss.py` maps a wall thickness onto the surface as a percentage of the local
+smoothed centerline diameter, found by nearest-centerline lookup. That lookup is
+discontinuous: two adjacent surface points either side of a bifurcation can snap
+to different branches, stepping the thickness. Since the solid is built by
+offsetting each point along its own normal, a step in the offset distance twists
+the extruded cells, and where it coincides with a sharp convex ridge on the wall
+it produces warped and incorrectly oriented faces in the solid mesh.
+
+The mapped field is therefore smoothed over the surface point graph
+(`--thickness-smoothing-passes`, default 10). This flattens the steps without
+eroding the wall: on the supplied geometries the peak thickness gradient falls
+by about a factor of five while the mean thickness changes by under 0.001%.
+
+### Mesh refinement
+
+`maxCellSize` in `templateMesh/fluidMeshing/system/meshDict` sets the global
+cell size, and `add_refinements.py` adds the local refinement each geometry
+needs. Nothing is placed by hand, so the dictionary carries no coordinates tied
+to one anatomy; any `objectRefinements` block already present is replaced.
+
+- **Outlets.** A cap only a few cells across cannot be separated from the vessel
+  wall by `autoPatch`. It merges into the wall, and the merged faces then have
+  no counterpart on the uncapped surface that supplies the wall thickness, so
+  `mapExtrudeDistance` fails. Each small profile gets a sphere, centred on its
+  extended rim with a radius of `--sphere-radius-factor` times the profile
+  radius. That factor defaults to 4 rather than 2 because a flow extension is
+  itself one diameter long, so a smaller sphere covers only the extension and
+  none of the feeder vessel behind it.
+- **Narrow branches.** A Cartesian mesh snapped to a tube six or seven cells
+  across leaves faceted corners on the wall, and offsetting those corners
+  produces the convex-crease defects described above. The centerlines carry a
+  radius at every point, so narrow branches are refined by cone segments
+  following the vessel. Required sizes are quantised to cfMesh's octree levels
+  so a branch becomes a few cones rather than hundreds of spheres.
+
+Both are driven by `--cells-per-radius` (default 5), which is the number of
+cells wanted across a vessel radius. Three was the earlier default and proved
+too coarse: it leaves only six cells across a diameter, enough for the meshed
+wall to reach dihedral angles of 70 to 80 degrees where the input surface is
+smooth at 30 to 45. Raising it to 5 refines roughly a tenth of the lumen and
+adds on the order of 30% more cells on the supplied geometries.
+
 Every open profile is then extended along its centerline direction by
-`--extension-diameters` local diameters (default 1). The extensions terminate
+`--extension-diameters` local diameters (default 0.5). Each extension blends
+the real, generally non-circular profile into a circular rim over
+`--extension-transition-ratio` of its length (default 0.8); a short extension
+needs a large value, since the blend gradient is what a short extension makes
+steep, and on a large irregular profile a steep blend leaves a crease sharp
+enough to fold the solid extrusion. The extensions terminate
 in circular, planar rims, which makes capping exact, moves the inlet and outlet
 boundary conditions away from the bifurcations, and gives the extruded solid end
 rings that are planar and normal to the vessel axis, as the symmetry patches
 assigned to them require. Profiles are capped with a triangle fan around a new
 centre point.
+
+The extension filter emits triangles whose winding does not follow the surface
+it was given, so consistent winding is re-established afterwards. Without that
+step the surface reaches cfMesh carrying more than a thousand apparent creases
+that are really opposed normals, and they end up as defects in the solid.
 
 ## What is version-controlled
 
