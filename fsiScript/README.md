@@ -120,7 +120,35 @@ in circular, planar rims, which makes capping exact, moves the inlet and outlet
 boundary conditions away from the bifurcations, and gives the extruded solid end
 rings that are planar and normal to the vessel axis, as the symmetry patches
 assigned to them require. Profiles are capped with a triangle fan around a new
-centre point.
+centre point, and that fan is then rebuilt.
+
+A fan is not a mesh. VMTK resamples each rim into a regular polygon before
+fanning it, so every cap arrives as a ring of congruent slivers: on p16 that is
+50 triangles per cap with a 7.2 degree apex and a normalised shape quality of
+0.215, where an equilateral triangle scores 1. One triangle then spans half the
+opening, which leaves cfMesh nothing to project a boundary vertex onto across
+the cap interior and gives `surfaceFeatureEdges` badly conditioned triangles to
+take dihedral angles from. `vtkvmtkPolyDataSurfaceRemeshing` replaces them with
+isotropic triangles, and the result is better shaped than the vessel wall
+itself: quality 0.967 mean and 0.388 worst against the wall's 0.947 and 0.302,
+smallest angle 17.0 degrees against 10.3, longest-to-shortest edge at most 2.4
+against 5.3.
+
+Only the caps are rebuilt. The wall is handed to the remesher as an excluded
+region, which pins the rim shared with each cap, so the vessel surface comes
+back with every triangle unmoved and the surface stays closed and manifold. The
+caps stay in their own planes. Nothing the thickness mapping or the solid
+extrusion depends on can therefore change, and in an A/B on p16 the fluid volume
+mesh barely moved either: 255,916 cells against 255,907, the same maximum
+non-orthogonality and skewness to three figures. This step improves the surface
+handed to cfMesh, not the cell size, which is still set by `maxCellSize` and the
+refinement spheres.
+
+Each cap is sized from the wall triangles on its own rim rather than from one
+global length, because the ends of a single geometry are nothing alike: around
+the p02 inlet the wall averages 1.87 mm and around `outlet11` it averages
+0.187 mm. A shared target would leave the smallest outlets with triangles wider
+than the outlet.
 
 The extension filter emits triangles whose winding does not follow the surface
 it was given, so consistent winding is re-established afterwards. Without that

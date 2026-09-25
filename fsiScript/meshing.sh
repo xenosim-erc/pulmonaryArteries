@@ -390,8 +390,8 @@ env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
     "$FSI_PYTHON" "$CENTERLINE_SCRIPT" "${geometry_arguments[@]}" 2>&1 \
     | tee "$geometry_log"
 
-# The patch check below compares what autoPatch finds against the number of
-# open profiles this stage reported.
+# The patch check below compares the patches cfMesh produced against the number
+# of open profiles this stage reported.
 profile_count="$(sed -n 's/^Detected \([0-9][0-9]*\) open profiles$/\1/p' \
     "$geometry_log" | head -1)"
 profile_count="${profile_count:-0}"

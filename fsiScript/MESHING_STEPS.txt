@@ -41,55 +41,59 @@ GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
                                        entity id by the VMTK capper.
 17. Name every region                  Largest region becomes 'wall', the cap on the largest
                                        profile 'inlet', the rest 'outlet1..N'.
-18. Write the surfaces                 <prefix>_uncapped.vtp for thickness mapping, and
+18. Remesh the caps                    The capper leaves each opening as a ring of
+                                       congruent slivers fanned to one centre point;
+                                       they are rebuilt as isotropic triangles sized
+                                       from the wall they meet. The wall is excluded.
+19. Write the surfaces                 <prefix>_uncapped.vtp for thickness mapping, and
                                        <prefix>_capped.stl as one named solid per region.
 
 
 FLUID MESH
 ----------
-19. Copy the mesh template             templateMesh into the case: fluidMeshing, varExtrudeFunc.
-20. Convert surface to FMS             surfaceFeatureEdges; the named solids become named
+20. Copy the mesh template             templateMesh into the case: fluidMeshing, varExtrudeFunc.
+21. Convert surface to FMS             surfaceFeatureEdges; the named solids become named
                                        cfMesh patches, so no patch has to be inferred later.
-21. Type the patches                   The FMS carries the type cfMesh puts on each mesh
+22. Type the patches                   The FMS carries the type cfMesh puts on each mesh
                                        patch: only the vessel wall is a wall, every
                                        opening is a plain patch.
-22. Point meshDict at the FMS          Rewrite the surfaceFile entry for this case.
-23. Inject local refinement            add_refinements.py sizes a sphere for every outlet too
+23. Point meshDict at the FMS          Rewrite the surfaceFile entry for this case.
+24. Inject local refinement            add_refinements.py sizes a sphere for every outlet too
                                        small for maxCellSize, snapped to an octree level.
-24. Mesh the fluid                     cartesianMesh.
-25. Check the fluid mesh               checkMesh -allTopology -allGeometry.
-26. Report the patches                 Count wall, inlet and outlets; abort if any named
+25. Mesh the fluid                     cartesianMesh.
+26. Check the fluid mesh               checkMesh -allTopology -allGeometry.
+27. Report the patches                 Count wall, inlet and outlets; abort if any named
                                        opening was meshed shut by too coarse a cell size.
-27. Insert a zero-face outerWall       add_empty_boundary_patch.py; varExtrudeMesh needs it
+28. Insert a zero-face outerWall       add_empty_boundary_patch.py; varExtrudeMesh needs it
                                        as the exposed-patch placeholder.
 
 
 WALL THICKNESS
 --------------
-28. Export centerlines to CSV          centerlines_to_csv.py; per-branch arc length and radius.
-29. Map thickness to the surface       Gauss.py: smooth diameter along each branch, take the
+29. Export centerlines to CSV          centerlines_to_csv.py; per-branch arc length and radius.
+30. Map thickness to the surface       Gauss.py: smooth diameter along each branch, take the
                                        requested percentage, smooth it over the surface.
-30. Project onto the fluid wall        mapExtrudeDistance writes 0/WallThickness; points beyond
+31. Project onto the fluid wall        mapExtrudeDistance writes 0/WallThickness; points beyond
                                        --max-mapping-distance warn rather than abort.
 
 
 SOLID MESH
 ----------
-31. Extrude the solid wall             varExtrudeMesh offsets the fluid wall along its point
+32. Extrude the solid wall             varExtrudeMesh offsets the fluid wall along its point
                                        normals by the mapped thickness, in 3 layers.
-32. Drop the temporary fluid patch      createPatch removes the now-unneeded zero-face patch.
-33. Name the solid walls                Exposed face becomes 'innerWall' (conformal with the
+33. Drop the temporary fluid patch      createPatch removes the now-unneeded zero-face patch.
+34. Name the solid walls                Exposed face becomes 'innerWall' (conformal with the
                                         fluid wall), the extruded face 'outerWall'.
-34. Set the solid ends to symmetry      Inlet and outlet rings become symmetry patches, in two
+35. Set the solid ends to symmetry      Inlet and outlet rings become symmetry patches, in two
                                         passes so the type is applied reliably.
-35. Verify the symmetry patches         Confirm the expected count and type were written.
+36. Verify the symmetry patches         Confirm the expected count and type were written.
 
 
 CASE ASSEMBLY
 -------------
-36. Copy the case template              templateCase into run/<name>; refuses to overwrite.
-37. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
-38. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+37. Copy the case template              templateCase into run/<name>; refuses to overwrite.
+38. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
+39. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
 
 
 AFTERWARDS - NOT DONE BY THE SCRIPT

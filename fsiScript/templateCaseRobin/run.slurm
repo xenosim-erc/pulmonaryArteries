@@ -2,8 +2,8 @@
 #SBATCH --job-name=rob_lin_newBuild
 #SBATCH --output=log.%x_%j.out
 #SBATCH --error=log.%x_%j.err
-#SBATCH --partition=long
-#SBATCH --ntasks=16
+#SBATCH --partition=main
+#SBATCH --ntasks=32
 #SBATCH --cpus-per-task=1
 #SBATCH --time=48:00:00
 

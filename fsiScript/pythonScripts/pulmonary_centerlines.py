@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import sys
 from collections import defaultdict, deque
 from pathlib import Path
@@ -579,6 +580,132 @@ def name_cap_regions(
     return names
 
 
+TARGET_AREA = "TargetArea"
+
+
+def remesh_caps(
+    surface: vtk.vtkPolyData, entity_ids: np.ndarray, wall_id: int
+) -> tuple[vtk.vtkPolyData, np.ndarray]:
+    """Replace each cap's triangle fan with an isotropic triangulation.
+
+    The capper resamples a rim into a regular polygon and fans it to a single
+    centre point, so every cap arrives as a ring of congruent slivers: on p02
+    each cap was 50 identical triangles with a 7.2 degree apex, a normalised
+    shape quality of 0.215 against 1.0 for an equilateral triangle. That is one
+    long triangle spanning the whole opening in place of a mesh, which leaves
+    cfMesh nothing to project a boundary vertex onto across the cap interior and
+    gives surfaceFeatureEdges badly conditioned triangles to take dihedral
+    angles from.
+
+    Only the caps are rebuilt. The wall is handed to the remesher as an excluded
+    region, so its triangles are not touched and the rim shared with each cap
+    cannot move; the vessel surface that the thickness mapping and the solid
+    extrusion depend on is therefore bit-for-bit what it was. The caps stay in
+    their own planes, which the extensions made planar, so the openings remain
+    flat.
+
+    Each cap is sized from the wall it meets rather than from a single global
+    length, because the two ends of one geometry are nothing like each other: on
+    p02 the wall triangles around the inlet average 1.87 mm and those around
+    outlet11 average 0.187 mm. A shared target would leave the smallest outlets
+    with triangles wider than the outlet itself.
+    """
+    vtkvmtk = import_vmtk()
+
+    points = vtk_to_numpy(surface.GetPoints().GetData())
+    polygons = vtk_to_numpy(surface.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+    wall_triangles = polygons[entity_ids == wall_id]
+    if not len(wall_triangles):
+        raise RuntimeError("no wall cells were found to remesh the caps against")
+
+    def mean_edge_length(triangles: np.ndarray) -> float:
+        corners = points[triangles]
+        return float(np.linalg.norm(corners - np.roll(corners, 1, 1), axis=2).mean())
+
+    # The target is point data, and a rim point belongs to both its cap and the
+    # wall. Giving it the cap's target is what is wanted: the new triangles die
+    # down to the size of the wall triangles they meet.
+    targets = np.full(len(points), mean_edge_length(wall_triangles))
+    for identifier in np.unique(entity_ids):
+        if identifier == wall_id:
+            continue
+        cap_points = np.unique(polygons[entity_ids == identifier])
+        neighbours = wall_triangles[np.isin(wall_triangles, cap_points).any(1)]
+        if not len(neighbours):
+            raise RuntimeError(f"cap {identifier} does not touch the wall")
+        targets[cap_points] = mean_edge_length(neighbours)
+
+    working = vtk.vtkPolyData()
+    working.DeepCopy(surface)
+    # The capper writes the entity ids as a vtkIdTypeArray but the remesher
+    # reads a vtkIntArray. Left as it is, the array is silently not found, no
+    # region is excluded and the whole surface is remeshed.
+    identifiers = numpy_to_vtk(
+        entity_ids.astype(np.int32), deep=1, array_type=vtk.VTK_INT
+    )
+    identifiers.SetName(CELL_ENTITY_IDS)
+    working.GetCellData().AddArray(identifiers)
+    areas = numpy_to_vtk(0.25 * math.sqrt(3.0) * targets**2, deep=1)
+    areas.SetName(TARGET_AREA)
+    working.GetPointData().AddArray(areas)
+
+    excluded = vtk.vtkIdList()
+    excluded.InsertNextId(int(wall_id))
+
+    remesher = vtkvmtk.vtkvmtkPolyDataSurfaceRemeshing()
+    remesher.SetInputData(working)
+    remesher.SetCellEntityIdsArrayName(CELL_ENTITY_IDS)
+    remesher.SetExcludedEntityIds(excluded)
+    remesher.SetElementSizeModeToTargetAreaArray()
+    remesher.SetTargetAreaArrayName(TARGET_AREA)
+    remesher.SetNumberOfIterations(10)
+    remesher.SetNumberOfConnectivityOptimizationIterations(20)
+    remesher.SetPreserveBoundaryEdges(1)
+    # The filter counts its iterations out on standard output from C++, which
+    # tee'd to the screen buries the one line this stage is meant to print.
+    # Errors go to standard error and are not affected.
+    sys.stdout.flush()
+    saved = os.dup(1)
+    try:
+        with open(os.devnull, "w") as quiet:
+            os.dup2(quiet.fileno(), 1)
+        remesher.Update()
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+
+    output = vtk.vtkPolyData()
+    output.DeepCopy(remesher.GetOutput())
+    array = output.GetCellData().GetArray(CELL_ENTITY_IDS)
+    if array is None:
+        raise RuntimeError("the remesher did not carry the entity ids through")
+    updated = vtk_to_numpy(array).astype(int)
+
+    # Every patch must survive, and the wall must come back untouched: if the
+    # entity ids were not read the wall would have been remeshed too, silently
+    # moving the surface the solid is extruded from.
+    if set(updated.tolist()) != set(entity_ids.tolist()):
+        raise RuntimeError("cap remeshing lost or invented a named region")
+    before = np.sort(points[wall_triangles].reshape(-1, 9), axis=0)
+    new_points = vtk_to_numpy(output.GetPoints().GetData())
+    new_polygons = vtk_to_numpy(output.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+    after = np.sort(new_points[new_polygons[updated == wall_id]].reshape(-1, 9), axis=0)
+    if before.shape != after.shape or not np.allclose(before, after):
+        raise RuntimeError("cap remeshing moved the vessel wall")
+
+    edges = vtk.vtkFeatureEdges()
+    edges.SetInputData(output)
+    edges.BoundaryEdgesOn()
+    edges.NonManifoldEdgesOn()
+    edges.FeatureEdgesOff()
+    edges.ManifoldEdgesOff()
+    edges.Update()
+    if edges.GetOutput().GetNumberOfCells():
+        raise RuntimeError("cap remeshing left the surface open or non-manifold")
+
+    return output, updated
+
+
 def write_named_stl(
     surface: vtk.vtkPolyData,
     entity_ids: np.ndarray,
@@ -884,6 +1011,14 @@ def main() -> int:
 
     capped, entity_ids = cap_surface(uncapped)
     names = name_cap_regions(capped, entity_ids, final_profiles)
+
+    wall_id = next(key for key, name in names.items() if name == "wall")
+    cap_cells = int((entity_ids != wall_id).sum())
+    capped, entity_ids = remesh_caps(capped, entity_ids, wall_id)
+    print(
+        f"Remeshed the caps: {cap_cells} triangles to "
+        f"{int((entity_ids != wall_id).sum())}, the wall untouched"
+    )
 
     uncapped_path = output_dir / f"{prefix}_uncapped.vtp"
     capped_path = output_dir / f"{prefix}_capped.stl"
