@@ -91,7 +91,7 @@ IQNILSCoeffs
     // Optional (only for IQNILS): re-use modes from previous time-steps.
     // The number of modes to be re-used is specified
     // Defaults to 0 modes
-    couplingReuse       0;
+    couplingReuse       2;
 
     // Optional: if any point on the fluid interface moves greater than the
     // interfaceDeformationLimit then the entire fluid mesh is updated; if not
