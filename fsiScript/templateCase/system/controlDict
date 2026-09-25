@@ -64,21 +64,6 @@ functions
          historyPatch    innerWall;
      }
 
-           pressureProbe
-     {
-       type probes;
-       region fluid;
-       libs (sampling);
-       
-       writeControl timeStep;
-       writeInterval 1;
-       
-       fields (p);
-       probeLocations
-	 (
- 	   (0.04 -0.008 0.065) //MPA
-	  );
-     }
     solidForce
     {
         type           solidForces;

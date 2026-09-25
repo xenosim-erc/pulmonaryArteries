@@ -33,7 +33,7 @@ boundaryField
     // adjacent cells. slip lets the points slide within their own plane instead,
     // matching what the solid already does for pointD. It relies on the patches
     // being planar, which the flow extensions guarantee.
-    "auto.*"
+    "outlet.*"
     {
         type         slip;
         value        uniform (0 0 0);

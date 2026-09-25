@@ -27,7 +27,7 @@ boundaryField
        type processor;
      }
 
-  "auto.*"
+  "outlet.*"
     {
       type            symmetry;//fixedDisplacementZeroShear;
         value           uniform (0 0 0);

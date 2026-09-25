@@ -26,7 +26,7 @@ boundaryField
     {
       type processor;
     }
-  "auto.*"
+  "outlet.*"
     {
       type inletOutlet;// type         fluxCorrectedVelocity;
       value uniform (0 0 0);

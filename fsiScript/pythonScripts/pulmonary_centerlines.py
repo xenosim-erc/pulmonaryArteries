@@ -19,6 +19,7 @@ from typing import Sequence
 import numpy as np
 import scipy.sparse as sp
 import vtk
+from scipy.spatial import cKDTree
 from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
 
@@ -300,8 +301,6 @@ def local_wall_thickness(
     Gauss.py's own smoothing and nearest-centerline mapping are reused so the
     threshold here matches the thickness that is actually extruded.
     """
-    from scipy.spatial import cKDTree
-
     from Gauss import smooth_diameters
 
     points, radii, branches, distances = centerline_branch_arrays(centerlines)
@@ -441,11 +440,17 @@ def import_vmtk():
     return vtkvmtk
 
 
+# Fraction of each extension over which the real, generally non-circular
+# profile is blended into the circular rim VMTK always produces. Measured on
+# these geometries: 0.5 leaves a 63 degree crease that the solid extrusion
+# folds, 0.8 leaves 41 degrees, and going further buys nothing.
+EXTENSION_TRANSITION_RATIO = 0.8
+
+
 def extend_profiles(
     surface: vtk.vtkPolyData,
     centerlines: vtk.vtkPolyData,
     extension_diameters: float,
-    transition_ratio: float = 0.8,
 ) -> vtk.vtkPolyData:
     """Add straight flow extensions of the given length to every open profile.
 
@@ -472,12 +477,7 @@ def extend_profiles(
     extensions.SetAdaptiveExtensionRadius(1)
     extensions.SetAdaptiveNumberOfBoundaryPoints(0)
     extensions.SetExtensionRatio(2.0 * extension_diameters)
-    # Fraction of the extension over which the real, generally non-circular
-    # profile is blended into the circular rim. A short extension needs a large
-    # value: at 0.5 the blend happens over half an already-halved length, which
-    # on a large irregular profile such as the main pulmonary artery leaves a
-    # crease sharp enough to fold the solid extrusion.
-    extensions.SetTransitionRatio(transition_ratio)
+    extensions.SetTransitionRatio(EXTENSION_TRANSITION_RATIO)
     extensions.SetCenterlineNormalEstimationDistanceRatio(1.0)
     extensions.SetNumberOfBoundaryPoints(50)
     extensions.SetSigma(1.0)
@@ -503,11 +503,20 @@ def extend_profiles(
     return output
 
 
-def cap_surface(surface: vtk.vtkPolyData) -> vtk.vtkPolyData:
-    """Close every open profile with a triangle fan around a new centre point.
+CELL_ENTITY_IDS = "CellEntityIds"
 
-    vtkFillHolesFilter, used previously, ear-clips the rim without adding a
-    centre vertex and so produces slivers that survive into the cfMesh surface.
+
+def cap_surface(surface: vtk.vtkPolyData) -> tuple[vtk.vtkPolyData, np.ndarray]:
+    """Close every open profile, tagging the wall and each cap separately.
+
+    The capper labels the cells it adds, which is what lets every opening be
+    named here rather than recovered later from the volume mesh. Deducing the
+    openings after meshing meant separating boundary faces by the angle between
+    them, and that cannot tell a cap from a patch of wall: a region refined
+    finer than its surroundings was split off as though it were an opening,
+    while a cap only a few cells across was absorbed into the wall.
+
+    Returns the capped surface and one entity id per cell.
     """
     vtkvmtk = import_vmtk()
 
@@ -515,6 +524,8 @@ def cap_surface(surface: vtk.vtkPolyData) -> vtk.vtkPolyData:
     capper.SetInputData(surface)
     capper.SetDisplacement(0.0)
     capper.SetInPlaneDisplacement(0.0)
+    capper.SetCellEntityIdsArrayName(CELL_ENTITY_IDS)
+    capper.SetCellEntityIdOffset(0)
     capper.Update()
 
     triangles = vtk.vtkTriangleFilter()
@@ -522,7 +533,84 @@ def cap_surface(surface: vtk.vtkPolyData) -> vtk.vtkPolyData:
     triangles.Update()
     output = vtk.vtkPolyData()
     output.DeepCopy(triangles.GetOutput())
-    return output
+
+    array = output.GetCellData().GetArray(CELL_ENTITY_IDS)
+    if array is None:
+        raise RuntimeError("the capper did not tag its cells with entity ids")
+    return output, vtk_to_numpy(array).astype(int)
+
+
+def name_cap_regions(
+    surface: vtk.vtkPolyData, entity_ids: np.ndarray, profiles
+) -> dict[int, str]:
+    """Give each entity id the patch name it should carry into the mesh.
+
+    The wall is the region with by far the most cells. Each remaining region is
+    matched to the open profile it sits on, and the one on the largest profile
+    becomes the inlet, as that is the main pulmonary artery.
+    """
+    points = vtk_to_numpy(surface.GetPoints().GetData())
+    polygons = vtk_to_numpy(surface.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+    centres = np.array([centroid for _, centroid in profiles])
+    areas = np.array([area for area, _ in profiles])
+
+    unique, counts = np.unique(entity_ids, return_counts=True)
+    wall_id = int(unique[counts.argmax()])
+
+    matched: list[tuple[int, int]] = []
+    for identifier in unique:
+        if int(identifier) == wall_id:
+            continue
+        selection = polygons[entity_ids == identifier]
+        centre = points[np.unique(selection)].mean(0)
+        matched.append(
+            (int(identifier), int(np.linalg.norm(centres - centre, axis=1).argmin()))
+        )
+
+    if not matched:
+        raise RuntimeError("the capper produced no caps")
+
+    inlet_id = max(matched, key=lambda pair: areas[pair[1]])[0]
+    names = {wall_id: "wall", inlet_id: "inlet"}
+    for number, (identifier, _) in enumerate(
+        (pair for pair in matched if pair[0] != inlet_id), start=1
+    ):
+        names[identifier] = f"outlet{number}"
+    return names
+
+
+def write_named_stl(
+    surface: vtk.vtkPolyData,
+    entity_ids: np.ndarray,
+    names: dict[int, str],
+    filename: Path,
+) -> None:
+    """Write one ASCII STL solid per named region.
+
+    cfMesh turns each solid into a patch of the same name, so the patches of the
+    finished mesh are decided here, by construction, rather than inferred.
+    """
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    points = vtk_to_numpy(surface.GetPoints().GetData())
+    polygons = vtk_to_numpy(surface.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+    a, b, c = points[polygons[:, 0]], points[polygons[:, 1]], points[polygons[:, 2]]
+    normals = np.cross(b - a, c - a)
+    normals /= np.maximum(np.linalg.norm(normals, axis=1), 1e-30)[:, None]
+
+    with filename.open("w", encoding="ascii") as handle:
+        for identifier, name in sorted(names.items(), key=lambda kv: kv[1]):
+            handle.write(f"solid {name}\n")
+            for index in np.flatnonzero(entity_ids == identifier):
+                handle.write(
+                    " facet normal %.9g %.9g %.9g\n  outer loop\n"
+                    % tuple(normals[index])
+                )
+                for vertex in (a[index], b[index], c[index]):
+                    handle.write("   vertex %.9g %.9g %.9g\n" % tuple(vertex))
+                handle.write("  endloop\n endfacet\n")
+            handle.write(f"endsolid {name}\n")
+    if not filename.is_file():
+        raise RuntimeError(f"Could not write {filename}")
 
 
 def write_profiles_csv(profiles, filename: Path) -> None:
@@ -634,15 +722,6 @@ def parse_args() -> argparse.Namespace:
         help="skip centerline extraction, and with it the flow extensions",
     )
     parser.add_argument(
-        "--extension-transition-ratio",
-        type=float,
-        default=0.8,
-        help=(
-            "fraction of each flow extension used to blend the real profile "
-            "into its circular rim (default: 0.8)"
-        ),
-    )
-    parser.add_argument(
         "--minimum-profile-radius",
         type=float,
         default=1.0,
@@ -679,15 +758,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--saddle-target-radius",
-        type=float,
-        default=0.0,
-        help=(
-            "override the thickness-derived target with one fixed radius, in "
-            "model units; 0 keeps the local thickness-derived target"
-        ),
-    )
-    parser.add_argument(
         "--gaussian-sigma",
         type=float,
         default=10.0,
@@ -708,7 +778,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extension-diameters",
         type=float,
-        default=0.5,
+        default=1.0,
         help="flow-extension length per profile, in local diameters; 0 disables",
     )
     return parser.parse_args()
@@ -773,18 +843,14 @@ def main() -> int:
     # centerlines are re-extracted afterwards so every downstream diameter
     # describes the geometry that is actually meshed.
     if centerlines is not None and not args.no_saddle_smoothing:
-        if args.saddle_target_radius > 0.0:
-            target = args.saddle_target_radius
-            description = f"a fixed radius of {target:g}"
-        else:
-            thickness = local_wall_thickness(
-                uncapped, centerlines, args.extrusion_percentage, args.gaussian_sigma
-            )
-            target = thickness / args.saddle_safety_factor
-            description = (
-                f"the local wall thickness / {args.saddle_safety_factor:g} "
-                f"(target radius {target.min():.3g} to {target.max():.3g})"
-            )
+        thickness = local_wall_thickness(
+            uncapped, centerlines, args.extrusion_percentage, args.gaussian_sigma
+        )
+        target = thickness / args.saddle_safety_factor
+        description = (
+            f"the local wall thickness / {args.saddle_safety_factor:g} "
+            f"(target radius {target.min():.3g} to {target.max():.3g})"
+        )
 
         uncapped, touched = smooth_saddles(uncapped, target, args.saddle_dilation)
         print(
@@ -800,12 +866,7 @@ def main() -> int:
         print("Skipping saddle smoothing because centerlines were not extracted.")
 
     if centerlines is not None and args.extension_diameters > 0.0:
-        uncapped = extend_profiles(
-            uncapped,
-            centerlines,
-            args.extension_diameters,
-            args.extension_transition_ratio,
-        )
+        uncapped = extend_profiles(uncapped, centerlines, args.extension_diameters)
         print(
             f"Extended every profile by {args.extension_diameters:g} diameter(s)"
         )
@@ -821,12 +882,15 @@ def main() -> int:
     write_profiles_csv(final_profiles, profiles_path)
     print(f"Wrote {profiles_path}")
 
-    capped = cap_surface(uncapped)
+    capped, entity_ids = cap_surface(uncapped)
+    names = name_cap_regions(capped, entity_ids, final_profiles)
 
     uncapped_path = output_dir / f"{prefix}_uncapped.vtp"
     capped_path = output_dir / f"{prefix}_capped.stl"
     write_vtp(uncapped, uncapped_path)
-    write_stl(capped, capped_path)
+    write_named_stl(capped, entity_ids, names, capped_path)
+    outlets = sum(1 for name in names.values() if name.startswith("outlet"))
+    print(f"Named the surface: wall, inlet and {outlets} outlet(s)")
     print(f"Wrote {uncapped_path}")
     print(f"Wrote {capped_path}")
     return 0

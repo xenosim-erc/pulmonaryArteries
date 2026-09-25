@@ -486,25 +486,45 @@ scalarField variableDistance::interpolateToPoints
     scalarField targetValues(targetPoints.size(), Zero);
     scalar largestMappingDistance = 0;
 
-    // findNearest expects a squared search radius.  GREAT means effectively
-    // unbounded; otherwise the caller's physical tolerance is squared.
-    const scalar searchDistanceSqr =
-        (maxDistance >= sqrt(GREAT) ? GREAT : sqr(maxDistance));
+    // The search is deliberately unbounded.  maxDistance is a quality
+    // tolerance, not a search radius: a point beyond it still takes the value
+    // of its nearest triangle, and only the number of such points decides
+    // whether the two surfaces genuinely fail to correspond.
+    //
+    // A handful of outliers is normal.  The cfMesh wall patch is snapped to
+    // the surface, so points where it has little to snap to, such as the rim
+    // where the wall meets a cap, sit a few tenths of a millimetre off.  The
+    // thickness field is smooth there, so taking the nearest triangle's value
+    // is correct.  Aborting instead threw away an otherwise sound mesh over a
+    // few points in tens of thousands.
+    label nBeyondTolerance = 0;
+    label firstBeyondTolerance = -1;
+    scalar worstBeyondTolerance = 0;
 
     forAll(targetPoints, targetPointi)
     {
         const point& target = targetPoints[targetPointi];
-        const pointIndexHit hit = tree.findNearest(target, searchDistanceSqr);
+        const pointIndexHit hit = tree.findNearest(target, GREAT);
 
         if (!hit.hit())
         {
             FatalErrorInFunction
-                << "No source triangle was found within maxDistance "
-                << maxDistance << " of target point " << targetPointi
-                << " at " << target << nl
-                << "Check that thickMap.vtk and the OpenFOAM wall patch use "
-                << "the same coordinates and units."
+                << "The source surface returned no nearest triangle for target "
+                << "point " << targetPointi << " at " << target << nl
+                << "The surface in thickMap.vtk appears to be empty or invalid."
                 << exit(FatalError);
+        }
+
+        const scalar hitDistance = mag(target - hit.point());
+
+        if (hitDistance > maxDistance)
+        {
+            ++nBeyondTolerance;
+            if (firstBeyondTolerance < 0)
+            {
+                firstBeyondTolerance = targetPointi;
+            }
+            worstBeyondTolerance = max(worstBeyondTolerance, hitDistance);
         }
 
         const triFace& triangle = searchSurface[hit.index()];
@@ -555,6 +575,37 @@ scalarField variableDistance::interpolateToPoints
             largestMappingDistance,
             mag(target - closest)
         );
+    }
+
+    // Only a large share of points beyond the tolerance indicates that the two
+    // surfaces do not correspond at all, which is what a units or geometry
+    // mismatch looks like: there every point is wrong, not a scattered few.
+    const scalar beyondFraction =
+        scalar(nBeyondTolerance)/max(targetPoints.size(), 1);
+
+    if (beyondFraction > 0.01)
+    {
+        FatalErrorInFunction
+            << nBeyondTolerance << " of " << targetPoints.size()
+            << " target points (" << 100*beyondFraction
+            << "%) are further than maxDistance " << maxDistance
+            << " from the source surface." << nl
+            << "The worst is " << worstBeyondTolerance << " away, the first is "
+            << "point " << firstBeyondTolerance << '.' << nl
+            << "Check that thickMap.vtk and the OpenFOAM wall patch use the "
+            << "same coordinates and units."
+            << exit(FatalError);
+    }
+
+    if (nBeyondTolerance > 0)
+    {
+        WarningInFunction
+            << nBeyondTolerance << " of " << targetPoints.size()
+            << " target points (" << 100*beyondFraction
+            << "%) are further than maxDistance " << maxDistance
+            << " from the source surface, the worst by "
+            << worstBeyondTolerance << '.' << nl
+            << "Each took the value of its nearest triangle." << endl;
     }
 
     Info<< "Mapped " << targetPoints.size()

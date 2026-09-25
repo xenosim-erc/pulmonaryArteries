@@ -17,6 +17,7 @@ EMPTY_PATCH_SCRIPT="$SCRIPT_DIR/pythonScripts/add_empty_boundary_patch.py"
 REFINEMENT_SCRIPT="$SCRIPT_DIR/pythonScripts/add_refinements.py"
 TEMPLATE_MESH_DIR="$SCRIPT_DIR/templateMesh"
 TEMPLATE_CASE_DIR="$SCRIPT_DIR/templateCase"
+TEMPLATE_CASE_ROBIN_DIR="$SCRIPT_DIR/templateCaseRobin"
 RUN_DIR="$SCRIPT_DIR/run"
 
 # Allow an alternate cfMesh installation to be selected on systems where the
@@ -25,8 +26,6 @@ SURFACE_FEATURE_EDGES="${SURFACE_FEATURE_EDGES:-surfaceFeatureEdges}"
 CARTESIAN_MESH="${CARTESIAN_MESH:-cartesianMesh}"
 CHECK_MESH="${CHECK_MESH:-checkMesh}"
 MAP_EXTRUDE_DISTANCE="${MAP_EXTRUDE_DISTANCE:-mapExtrudeDistance}"
-AUTO_PATCH="${AUTO_PATCH:-autoPatch}"
-FOAM_LIST_TIMES="${FOAM_LIST_TIMES:-foamListTimes}"
 CREATE_PATCH="${CREATE_PATCH:-createPatch}"
 VAR_EXTRUDE_MESH="${VAR_EXTRUDE_MESH:-varExtrudeMesh}"
 
@@ -95,7 +94,7 @@ fi
 
 for required_utility in \
     "$CARTESIAN_MESH" "$CHECK_MESH" "$MAP_EXTRUDE_DISTANCE" \
-    "$AUTO_PATCH" "$FOAM_LIST_TIMES" "$CREATE_PATCH" \
+    "$CREATE_PATCH" \
     "$VAR_EXTRUDE_MESH"; do
     if ! command -v "$required_utility" >/dev/null 2>&1; then
         echo "Error: required meshing utility not found: $required_utility" >&2
@@ -124,11 +123,12 @@ if [[ $# -eq 0 ]]; then
     echo "       [--output-dir DIR] [--prefix NAME] [--skip-centerlines]" >&2
     echo "       [--smoothing-iterations N] [--smoothing-passband VALUE]" >&2
     echo "       [--extension-diameters VALUE] [--no-saddle-smoothing]" >&2
-    echo "       [--saddle-safety-factor VALUE] [--saddle-target-radius VALUE]" >&2
+    echo "       [--saddle-safety-factor VALUE]" >&2
     echo "       [--saddle-dilation N] [--cells-per-radius VALUE]" >&2
     echo "       [--sphere-radius-factor VALUE]" >&2
-    echo "       [--thickness-smoothing-passes N] [--refine-narrow-vessels]" >&2
-    echo "       [--max-mapping-distance VALUE]" >&2
+    echo "       [--thickness-smoothing-passes N]" >&2
+    echo "       [--max-mapping-distance VALUE] [--maximum-refinement-levels N]" >&2
+    echo "       [--coupling dirichlet|robin]" >&2
     exit 2
 fi
 
@@ -145,10 +145,11 @@ output_dir=""
 skip_centerlines=false
 gaussian_sigma=""
 extrusion_percentage=""
+coupling=""
 cells_per_radius="3.0"
 sphere_radius_factor="4.0"
+maximum_refinement_levels="1"
 thickness_smoothing_passes="10"
-refine_narrow_vessels=false
 # mapExtrudeDistance aborts if any wall point is further than this from the
 # thickness-map surface. Its own default of 0.2 is far tighter than a 1 mm mesh
 # warrants: cfMesh snapping leaves a handful of rim points a few tenths of a
@@ -209,6 +210,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --extrusion-percentage=*)
             extrusion_percentage="${argument#*=}"
             ;;
+        --coupling)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --coupling requires a value" >&2
+                exit 2
+            }
+            coupling="${arguments[$index]}"
+            ;;
+        --coupling=*)
+            coupling="${argument#*=}"
+            ;;
         --cells-per-radius)
             index=$((index + 1))
             [[ $index -lt ${#arguments[@]} ]] || {
@@ -231,6 +243,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --sphere-radius-factor=*)
             sphere_radius_factor="${argument#*=}"
             ;;
+        --maximum-refinement-levels)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --maximum-refinement-levels requires a value" >&2
+                exit 2
+            }
+            maximum_refinement_levels="${arguments[$index]}"
+            ;;
+        --maximum-refinement-levels=*)
+            maximum_refinement_levels="${argument#*=}"
+            ;;
         --thickness-smoothing-passes)
             index=$((index + 1))
             [[ $index -lt ${#arguments[@]} ]] || {
@@ -241,9 +264,6 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --thickness-smoothing-passes=*)
             thickness_smoothing_passes="${argument#*=}"
-            ;;
-        --refine-narrow-vessels)
-            refine_narrow_vessels=true
             ;;
         --max-mapping-distance)
             index=$((index + 1))
@@ -282,6 +302,39 @@ if [[ "$skip_centerlines" == false ]]; then
     echo "Extrusion percentage: $extrusion_percentage%"
 fi
 
+# The two formulations need different interface conditions, so each has its own
+# case template. Robin cases are named with a Robin suffix so both can be
+# generated from one geometry without colliding.
+if [[ -z "$coupling" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "FSI coupling, dirichlet or robin [dirichlet]: " coupling
+    fi
+    coupling="${coupling:-dirichlet}"
+fi
+
+case "${coupling,,}" in
+    dirichlet)
+        coupling="dirichlet"
+        case_template="$TEMPLATE_CASE_DIR"
+        case_suffix=""
+        ;;
+    robin)
+        coupling="robin"
+        case_template="$TEMPLATE_CASE_ROBIN_DIR"
+        case_suffix="Robin"
+        ;;
+    *)
+        echo "Error: --coupling must be 'dirichlet' or 'robin', not '$coupling'" >&2
+        exit 2
+        ;;
+esac
+
+if [[ ! -d "$case_template" ]]; then
+    echo "Error: case template for $coupling coupling not found: $case_template" >&2
+    exit 1
+fi
+echo "FSI coupling: $coupling (template: $(basename -- "$case_template"))"
+
 # Both stages need the Gaussian and extrusion options: Gauss.py turns them into
 # the wall thickness, and pulmonary_centerlines.py uses the same numbers to set
 # the saddle-rounding target. Strip whichever form the caller used, then append
@@ -290,12 +343,10 @@ geometry_arguments=("${arguments[0]}")
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --refine-narrow-vessels)
-            ;;
-        --gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance)
+        --coupling|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
             index=$((index + 1))
             ;;
-        --gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*)
+        --coupling=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
             ;;
         *)
             geometry_arguments+=("$argument")
@@ -376,6 +427,48 @@ if [[ ! -s "$fms_path" ]]; then
     exit 1
 fi
 
+# Give every patch its proper OpenFOAM type. An STL carries no type, so the FMS
+# leaves every region "empty" and cfMesh then writes them all out as walls,
+# which is wrong for the openings and makes the boundary file confusing to read.
+# The FMS header is the only place this can be set: cfMesh copies each surface
+# region's geometric type straight onto the mesh patch it creates from it. Only
+# the vessel wall is a wall; every opening is a plain patch.
+#
+# meshDict's renameBoundary is not usable for this. It insists on a newName for
+# every entry, and giving the outlets a shared name merges them into a single
+# patch, which would cost the per-outlet boundary conditions.
+"$FSI_PYTHON" - "$fms_path" <<'PYTHON_FMS_TYPES'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+
+# The header is a count, an opening parenthesis, then one "name type" pair per
+# region. Rewrite only inside it; the geometry that follows must not be touched.
+header = re.match(r"\s*(\d+)\s*\(", text)
+if header is None:
+    sys.exit("error: FMS file does not start with a patch header")
+count = int(header.group(1))
+closing = text.index(")", header.end())
+
+def retype(match):
+    name = match.group("name")
+    return f"{name} {'wall' if name == 'wall' else 'patch'}"
+
+body, replaced = re.subn(
+    r"(?m)^(?P<name>\w+)[ \t]+\w+[ \t]*$",
+    retype,
+    text[header.end():closing],
+)
+if replaced != count:
+    sys.exit(f"error: retyped {replaced} of {count} FMS patches")
+
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text[: header.end()] + body + text[closing:])
+PYTHON_FMS_TYPES
+
 # Replace exactly the active surfaceFile entry without changing the source
 # template. cfMesh resolves the filename from the case root.
 escaped_fms_name="${fms_name//\\/\\\\}"
@@ -396,16 +489,9 @@ echo "Updated mesh dictionary: $mesh_dict"
 # Size a refinement sphere for every outlet that is only a few cells across.
 # Without this an outlet cap merges into the vessel wall during autoPatch.
 profiles_csv="$output_dir/${output_prefix}_profiles.csv"
-centerlines_vtp="$output_dir/${output_prefix}_centerlines.vtp"
 refinement_options=(--cells-per-radius "$cells_per_radius"
-                    --sphere-radius-factor "$sphere_radius_factor")
-
-# Narrow-vessel cone refinement is off unless asked for: the refinement-level
-# transitions it puts on the wall patch damage the extruded solid more than the
-# faceting it removes.
-if [[ "$refine_narrow_vessels" == true && -f "$centerlines_vtp" ]]; then
-    refinement_options+=(--centerlines "$centerlines_vtp")
-fi
+                    --sphere-radius-factor "$sphere_radius_factor"
+                    --maximum-refinement-levels "$maximum_refinement_levels")
 if [[ -f "$profiles_csv" ]]; then
     "$FSI_PYTHON" "$REFINEMENT_SCRIPT" "$mesh_dict" "$profiles_csv" \
         "${refinement_options[@]}"
@@ -422,19 +508,13 @@ run_step "Checking the fluid mesh..." "$fluid_case" log.checkMesh \
     "$CHECK_MESH" -allTopology -allGeometry
 echo "  checkMesh report: $fluid_case/log.checkMesh"
 
-# Preview automatic surface segmentation at a 50-degree feature angle. Without
-# -overwrite, autoPatch writes a new time so the original mesh remains intact
-# while the user reviews the detected patch count and sizes.
-run_step "Detecting boundary patches..." "$fluid_case" log.autoPatch.preview \
-    "$AUTO_PATCH" 50
-preview_time="$(cd "$fluid_case" && "$FOAM_LIST_TIMES" -latestTime -noZero)"
-preview_boundary="$fluid_case/$preview_time/polyMesh/boundary"
-if [[ -z "$preview_time" || ! -f "$preview_boundary" ]]; then
-    echo "Error: could not locate the preview mesh written by autoPatch" >&2
-    exit 1
-fi
+# The patches were decided when the surface was capped: every region of the
+# capped STL is a named solid, and cfMesh turns each into a patch of the same
+# name. Nothing here has to work out what an opening is.
+boundary_file="$fluid_case/constant/polyMesh/boundary"
 
-# Extract '<patch-name> <nFaces>' pairs from an OpenFOAM boundary file.
+# Report each patch and refuse to continue if any named opening was meshed shut,
+# which happens when a profile is too small for the cell size to resolve.
 patch_sizes() {
     awk '
         /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ {
@@ -448,103 +528,37 @@ patch_sizes() {
     ' "$1"
 }
 
-mapfile -t preview_patches < <(patch_sizes "$preview_boundary")
-if (( ${#preview_patches[@]} < 2 )); then
-    echo "Error: autoPatch detected fewer than two patches" >&2
-    exit 1
-fi
-
-# Write the full patch table to a file and report only the counts. One patch
-# is expected per open profile, plus the vessel wall itself.
 patch_table="$fluid_case/log.patches"
 {
     printf '%-32s %s\n' "Patch" "Faces"
-    for patch_entry in "${preview_patches[@]}"; do
-        read -r patch_name patch_faces <<< "$patch_entry"
+    patch_sizes "$boundary_file" | while read -r patch_name patch_faces; do
         printf '%-32s %s\n' "$patch_name" "$patch_faces"
     done
 } > "$patch_table"
 
-nonzero_patches=0
-for patch_entry in "${preview_patches[@]}"; do
-    read -r patch_name patch_faces <<< "$patch_entry"
-    if (( patch_faces > 0 )); then
-        nonzero_patches=$((nonzero_patches + 1))
-    fi
-done
+empty_patches=""
+outlet_count=0
+while read -r patch_name patch_faces; do
+    case "$patch_name" in
+        wall|inlet|outlet*)
+            if (( patch_faces == 0 )); then
+                empty_patches="$empty_patches $patch_name"
+            elif [[ "$patch_name" == outlet* ]]; then
+                outlet_count=$((outlet_count + 1))
+            fi
+            ;;
+    esac
+done < <(patch_sizes "$boundary_file")
 
-if (( profile_count > 0 )); then
-    expected_patches=$((profile_count + 1))
-    echo "Found $nonzero_patches patches with faces; expected $expected_patches ($profile_count open profiles + 1 wall)."
-else
-    echo "Found $nonzero_patches patches with faces."
-fi
-echo "  Patch sizes: $patch_table"
-
-if [[ ! -t 0 ]]; then
-    echo "Error: patch confirmation requires an interactive terminal." >&2
-    echo "Inspect $preview_boundary and rerun meshing.sh interactively." >&2
+echo "Meshed 1 wall, 1 inlet and $outlet_count outlet(s); patch sizes: $patch_table"
+if [[ -n "$empty_patches" ]]; then
+    echo "Error: these named patches were meshed shut:$empty_patches" >&2
+    echo "Their openings are too small for maxCellSize. Refine them with" >&2
+    echo "--cells-per-radius or --maximum-refinement-levels, or lower" >&2
+    echo "maxCellSize in the mesh template." >&2
     exit 1
 fi
-read -r -p "Are these detected patches correct? [y/N]: " patch_confirmation
-case "$patch_confirmation" in
-    y|Y|yes|YES|Yes)
-        ;;
-    *)
-        echo "Patch assignment was not accepted; stopping before modifying the mesh."
-        exit 1
-        ;;
-esac
 
-# Remove the preview time and apply the accepted segmentation to the constant
-# mesh. This deliberately follows the reviewed preview with the same angle.
-( cd "$fluid_case" && "$FOAM_LIST_TIMES" -rm > log.foamListTimes 2>&1 )
-run_step "Applying patch segmentation..." "$fluid_case" log.autoPatch \
-    "$AUTO_PATCH" 50 -overwrite
-
-boundary_file="$fluid_case/constant/polyMesh/boundary"
-mapfile -t ranked_patches < <(patch_sizes "$boundary_file" | sort -k2,2nr)
-if (( ${#ranked_patches[@]} < 2 )); then
-    echo "Error: the overwritten mesh contains fewer than two patches" >&2
-    exit 1
-fi
-read -r largest_patch largest_faces <<< "${ranked_patches[0]}"
-read -r second_patch second_faces <<< "${ranked_patches[1]}"
-
-# Rename the two largest patches. The required zero-face outerWall patch is
-# inserted directly into polyMesh/boundary after createPatch finishes, since
-# createPatch deliberately removes all empty patches.
-generated_patch_dict="$fluid_case/system/autoPatchCreatePatchDict"
-{
-    cat <<EOF
-FoamFile
-{
-    format      ascii;
-    class       dictionary;
-    object      createPatchDict;
-}
-
-pointSync false;
-
-patches
-(
-    {
-        name wall;
-        patchInfo { type wall; }
-        constructFrom patches;
-        patches ($largest_patch);
-    }
-    {
-        name inlet;
-        patchInfo { type patch; }
-        constructFrom patches;
-        patches ($second_patch);
-    }
-);
-EOF
-} > "$generated_patch_dict"
-run_step "Naming the fluid patches..." "$fluid_case" log.createPatch \
-    "$CREATE_PATCH" -overwrite -dict system/autoPatchCreatePatchDict
 "$FSI_PYTHON" "$EMPTY_PATCH_SCRIPT" "$boundary_file" outerWall wall
 
 # Confirm both the declared patch count and the exact zero-face entry were
@@ -560,8 +574,6 @@ if ! awk '
     echo "Error: outerWall was not written correctly to $boundary_file" >&2
     exit 1
 fi
-echo "Renamed largest patch '$largest_patch' ($largest_faces faces) to 'wall'."
-echo "Renamed second-largest patch '$second_patch' ($second_faces faces) to 'inlet'."
 echo "Created empty solid-extrusion back patch 'outerWall'."
 
 # Centerline output is intentionally absent when --skip-centerlines is used.
@@ -631,9 +643,9 @@ EOF
     # new temporary patch reliably receives the requested symmetry type.
     solid_patch_dict="$solid_case/system/solidCreatePatchDict"
     solid_symmetry_dict="$solid_case/system/solidSymmetryPatchDict"
-    mapfile -t solid_auto_patch_names < <(
+    mapfile -t solid_outlet_patch_names < <(
         patch_sizes "$solid_case/constant/polyMesh/boundary" |
-            awk '$1 ~ /^auto/ { print $1 }'
+            awk '$1 ~ /^outlet/ { print $1 }'
     )
     {
         cat <<'EOF'
@@ -667,7 +679,7 @@ patches
         patches (inlet);
     }
 EOF
-        for solid_patch_name in "${solid_auto_patch_names[@]}"; do
+        for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
             cat <<EOF
     {
         name symmetry_${solid_patch_name}_tmp;
@@ -707,7 +719,7 @@ patches
         patches (symmetry_inlet_tmp);
     }
 EOF
-        for solid_patch_name in "${solid_auto_patch_names[@]}"; do
+        for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
             cat <<EOF
     {
         name $solid_patch_name;
@@ -725,12 +737,12 @@ EOF
         log.createPatch.symmetry "$CREATE_PATCH" -overwrite \
         -dict system/solidSymmetryPatchDict
 
-    expected_symmetry_count=$((1 + ${#solid_auto_patch_names[@]}))
+    expected_symmetry_count=$((1 + ${#solid_outlet_patch_names[@]}))
     verified_symmetry_count="$(awk '
         /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ {
             candidate = $1
         }
-        $1 == "type" && (candidate == "inlet" || candidate ~ /^auto/) {
+        $1 == "type" && (candidate == "inlet" || candidate ~ /^outlet/) {
             type = $2
             sub(/;.*/, "", type)
             if (type != "symmetry") {
@@ -753,13 +765,13 @@ EOF
     echo "Generated solid wall mesh in: $solid_case"
     echo "Removed the temporary zero-face outerWall patch from the fluid mesh."
     echo "Renamed solid outerWall to innerWall and solid wall to outerWall."
-    echo "Changed the solid inlet and auto-named outlet patches to symmetry."
+    echo "Changed the solid inlet and outlet patches to symmetry."
 
     # Assemble the coupled FSI run case from the reusable template. The case is
     # named after the input geometry (for example, p16.stl creates run/p16).
     # Refuse to merge with an existing case because old mesh files could remain
     # and produce a run case that does not match the newly generated geometry.
-    run_case="$RUN_DIR/$case_name"
+    run_case="$RUN_DIR/${case_name}${case_suffix}"
     fluid_poly_mesh="$fluid_case/constant/polyMesh"
     solid_poly_mesh="$solid_case/constant/polyMesh"
 
@@ -778,7 +790,7 @@ EOF
     fi
 
     mkdir -p "$RUN_DIR"
-    cp -a "$TEMPLATE_CASE_DIR" "$run_case"
+    cp -a "$case_template" "$run_case"
     cp -a "$fluid_poly_mesh" "$run_case/constant/fluid/"
     cp -a "$solid_poly_mesh" "$run_case/constant/solid/"
 

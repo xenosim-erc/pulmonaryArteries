@@ -40,7 +40,7 @@ boundaryField
         //value           $internalField;
     }
     
-    "auto.*"
+    "outlet.*"
     {
         type            calculated;
         value           $internalField;

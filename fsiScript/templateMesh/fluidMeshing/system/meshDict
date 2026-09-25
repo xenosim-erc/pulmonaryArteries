@@ -18,7 +18,7 @@ FoamFile
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 surfaceFile "h08.fms";
-maxCellSize 1;
+maxCellSize 0.8;
 //boundaryCellSize 0.8;
 
 //boundaryCellSizeRefinementThickness 0.4;
@@ -40,4 +40,5 @@ maxCellSize 1;
 
                
      
+
 // ************************************************************************* //

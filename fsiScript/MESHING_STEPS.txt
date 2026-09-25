@@ -1,0 +1,102 @@
+FSI MESHING WORKFLOW - STEP BY STEP
+===================================
+
+Driver: meshing.sh INPUT.stl [options]
+Each step below names the script or utility that performs it. Every OpenFOAM
+utility writes its full output to its own log in the case directory and prints
+only a one-line descriptor to the screen.
+
+
+PRE-FLIGHT
+----------
+ 1. Locate the fsi-env Python          Fail early if VTK/VMTK are unreachable.
+ 2. Check the helper scripts exist     centerlines, CSV, Gauss, empty patch, refinements.
+ 3. Check the templates exist          templateMesh and templateCase directories.
+ 4. Check the meshing utilities        surfaceFeatureEdges, cartesianMesh, checkMesh,
+                                       createPatch, mapExtrudeDistance, varExtrudeMesh.
+ 5. Read the command line              Prompt for Gaussian sigma and extrusion percentage
+                                       if not supplied and a terminal is attached.
+
+
+GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
+--------------------------------------------------------
+ 6. Read and clean the STL             Merge duplicate points, triangulate, orient normals.
+ 7. Smooth the surface                 Windowed-sinc (Taubin) filter; rims held fixed so the
+                                       open profiles do not move.
+ 8. Fill sub-resolution holes          Close any opening below --minimum-profile-radius; a
+                                       scan defect must not become a boundary condition.
+ 9. Find the open profiles             Walk the boundary edges into loops; measure each one's
+                                       area and centroid.
+10. Extract centerlines                VMTK, sourced from the largest profile to all others;
+                                       carries MaximumInscribedSphereRadius.
+11. Round the concave saddles          Smooth only the bifurcation crotches, to a target
+                                       radius of the local wall thickness / safety factor.
+12. Re-extract centerlines             The surface moved, so the diameters are recomputed.
+13. Add flow extensions                Extend each profile along its centerline direction by
+                                       --extension-diameters, ending in a circular planar rim.
+14. Re-establish winding               The extension filter leaves opposed normals; consistent
+                                       winding is restored here.
+15. Re-measure the profiles            The rims have moved; write <prefix>_profiles.csv.
+16. Cap the surface                    Triangle fan per opening, each tagged with its own
+                                       entity id by the VMTK capper.
+17. Name every region                  Largest region becomes 'wall', the cap on the largest
+                                       profile 'inlet', the rest 'outlet1..N'.
+18. Write the surfaces                 <prefix>_uncapped.vtp for thickness mapping, and
+                                       <prefix>_capped.stl as one named solid per region.
+
+
+FLUID MESH
+----------
+19. Copy the mesh template             templateMesh into the case: fluidMeshing, varExtrudeFunc.
+20. Convert surface to FMS             surfaceFeatureEdges; the named solids become named
+                                       cfMesh patches, so no patch has to be inferred later.
+21. Type the patches                   The FMS carries the type cfMesh puts on each mesh
+                                       patch: only the vessel wall is a wall, every
+                                       opening is a plain patch.
+22. Point meshDict at the FMS          Rewrite the surfaceFile entry for this case.
+23. Inject local refinement            add_refinements.py sizes a sphere for every outlet too
+                                       small for maxCellSize, snapped to an octree level.
+24. Mesh the fluid                     cartesianMesh.
+25. Check the fluid mesh               checkMesh -allTopology -allGeometry.
+26. Report the patches                 Count wall, inlet and outlets; abort if any named
+                                       opening was meshed shut by too coarse a cell size.
+27. Insert a zero-face outerWall       add_empty_boundary_patch.py; varExtrudeMesh needs it
+                                       as the exposed-patch placeholder.
+
+
+WALL THICKNESS
+--------------
+28. Export centerlines to CSV          centerlines_to_csv.py; per-branch arc length and radius.
+29. Map thickness to the surface       Gauss.py: smooth diameter along each branch, take the
+                                       requested percentage, smooth it over the surface.
+30. Project onto the fluid wall        mapExtrudeDistance writes 0/WallThickness; points beyond
+                                       --max-mapping-distance warn rather than abort.
+
+
+SOLID MESH
+----------
+31. Extrude the solid wall             varExtrudeMesh offsets the fluid wall along its point
+                                       normals by the mapped thickness, in 3 layers.
+32. Drop the temporary fluid patch      createPatch removes the now-unneeded zero-face patch.
+33. Name the solid walls                Exposed face becomes 'innerWall' (conformal with the
+                                        fluid wall), the extruded face 'outerWall'.
+34. Set the solid ends to symmetry      Inlet and outlet rings become symmetry patches, in two
+                                        passes so the type is applied reliably.
+35. Verify the symmetry patches         Confirm the expected count and type were written.
+
+
+CASE ASSEMBLY
+-------------
+36. Copy the case template              templateCase into run/<name>; refuses to overwrite.
+37. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
+38. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+
+
+AFTERWARDS - NOT DONE BY THE SCRIPT
+-----------------------------------
+ *  Scale the mesh to metres            The geometry is in millimetres; the solver template is
+                                        SI. Nothing in the workflow converts it.
+ *  Check the solid mesh                 checkMesh on constant/solid; look for negative volume
+                                        cells at the bifurcations.
+ *  Review the case settings             Material properties, Windkessel values per outlet,
+                                        inlet waveform, decomposition and cluster paths.

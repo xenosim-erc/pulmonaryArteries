@@ -38,7 +38,7 @@ processor
 	value uniform 0;
       }
 
-    "auto.*"
+    "outlet.*"
     {
         type            inletOutlet;
         inletValue      uniform 0;

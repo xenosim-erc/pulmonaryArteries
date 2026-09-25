@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
-"""Refine the cfMesh dictionary wherever the vessel is narrow for the cell size.
+"""Refine the cfMesh dictionary around outlets too small for the cell size.
 
-Two things need resolving beyond the global maxCellSize.
-
-An outlet cap must be resolved by enough cells for autoPatch to separate it from
-the vessel wall. A profile whose radius is comparable to maxCellSize is only a
-few cells across, its cap merges into the wall, and the merged faces then have
-no counterpart on the uncapped surface that supplies the wall thickness. Each
-such profile gets a sphere.
-
-A narrow branch anywhere along the tree has the same problem in a different
-form: a Cartesian mesh snapped to a tube only six or seven cells across leaves
-faceted corners on the wall, and offsetting those corners along their point
-normals produces warped and incorrectly oriented faces in the extruded solid.
-Centerlines carry a radius at every point, so the branches are refined by cone
-segments following the vessel itself.
-
-Both are derived from the geometry rather than placed by hand, so the mesh
+An outlet only a few cells across is meshed shut: the opening never appears in
+the volume mesh, so the case silently loses a boundary condition. Each profile
+whose radius is small relative to maxCellSize therefore gets a refinement
+sphere, sized from its own radius rather than placed by hand, so the mesh
 dictionary stays independent of any particular anatomy.
+
+Refinement is deliberately shallow. A patch of wall meshed much finer than its
+surroundings leaves a size transition there, and cfMesh's staircase across that
+transition is sharp enough to damage the solid extrusion that follows, so
+--maximum-refinement-levels caps how far below maxCellSize this may go.
 """
 
 from __future__ import annotations
@@ -32,9 +25,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy as np
-import vtk
-from vtk.util.numpy_support import vtk_to_numpy
 
 
 MAX_CELL_SIZE = re.compile(r"(?m)^[ \t]*maxCellSize[ \t]+(?P<size>[0-9.eE+-]+)[ \t]*;")
@@ -88,81 +78,6 @@ def read_profiles(filename: Path) -> list[dict[str, float]]:
     return profiles
 
 
-def read_centerlines(filename: Path):
-    """Centerline points, their vessel radius, and the branch each belongs to."""
-    reader = vtk.vtkXMLPolyDataReader()
-    reader.SetFileName(str(filename))
-    reader.Update()
-    centerlines = reader.GetOutput()
-    radius = centerlines.GetPointData().GetArray("MaximumInscribedSphereRadius")
-    if radius is None:
-        raise RuntimeError(
-            "centerlines are missing the MaximumInscribedSphereRadius array"
-        )
-
-    branches = []
-    lines = centerlines.GetLines()
-    lines.InitTraversal()
-    identifiers = vtk.vtkIdList()
-    while lines.GetNextCell(identifiers):
-        ids = [identifiers.GetId(i) for i in range(identifiers.GetNumberOfIds())]
-        points = np.array([centerlines.GetPoint(i) for i in ids])
-        radii = np.array([radius.GetTuple1(i) for i in ids])
-        if len(points) >= 2:
-            branches.append((points, radii))
-    if not branches:
-        raise RuntimeError(f"no centerline branches were found in {filename}")
-    return branches
-
-
-def cone_refinements(branches, max_cell_size, cells_per_radius, radius_factor):
-    """One cone per run of centerline points that wants the same cell size.
-
-    Required cell sizes are quantised to the octree levels cfMesh works in, so a
-    branch becomes a handful of cones instead of one sphere per centerline point.
-    VMTK traces every branch from the same source, so the shared trunk is
-    repeated in each line; identical segments are emitted only once.
-    """
-    cones = []
-    seen = set()
-    for points, radii in branches:
-        wanted = radii / cells_per_radius
-        # Octree level: 0 means the global size is already fine enough.
-        levels = np.where(
-            wanted < max_cell_size,
-            np.ceil(np.log2(max_cell_size / np.maximum(wanted, 1e-12))),
-            0,
-        ).astype(int)
-
-        start = 0
-        for index in range(1, len(levels) + 1):
-            if index < len(levels) and levels[index] == levels[start]:
-                continue
-            level = int(levels[start])
-            if level > 0:
-                segment = slice(start, index)
-                first, last = points[start], points[index - 1]
-                if not np.allclose(first, last):
-                    key = (
-                        level,
-                        tuple(np.round(first, 3)),
-                        tuple(np.round(last, 3)),
-                    )
-                    if key not in seen:
-                        seen.add(key)
-                        cones.append(
-                            {
-                                "p0": first,
-                                "p1": last,
-                                "radius0": radius_factor * radii[start],
-                                "radius1": radius_factor * radii[index - 1],
-                                "cellSize": max_cell_size / (2.0**level),
-                            }
-                        )
-            start = index
-    return cones
-
-
 def remove_existing_block(text: str) -> str:
     """Strip any objectRefinements block so this script owns the whole entry."""
     match = re.search(r"(?m)^[ \t]*objectRefinements\b", text)
@@ -182,7 +97,7 @@ def remove_existing_block(text: str) -> str:
     raise RuntimeError("objectRefinements block is not brace balanced")
 
 
-def build_block(refined, radius_factor: float, cones) -> str:
+def build_block(refined, radius_factor: float) -> str:
     lines = ["objectRefinements", "{"]
     for profile, cell_size in refined:
         centre = " ".join(f"{value:.6g}" for value in profile["centre"])
@@ -193,20 +108,6 @@ def build_block(refined, radius_factor: float, cones) -> str:
             f"        cellSize    {cell_size:.6g};",
             f"        centre      ({centre});",
             f"        radius      {radius_factor * profile['radius']:.6g};",
-            "    }",
-        ]
-    for index, cone in enumerate(cones):
-        p0 = " ".join(f"{value:.6g}" for value in cone["p0"])
-        p1 = " ".join(f"{value:.6g}" for value in cone["p1"])
-        lines += [
-            f"    narrowVessel{index}",
-            "    {",
-            "        type        cone;",
-            f"        cellSize    {cone['cellSize']:.6g};",
-            f"        p0          ({p0});",
-            f"        radius0     {cone['radius0']:.6g};",
-            f"        p1          ({p1});",
-            f"        radius1     {cone['radius1']:.6g};",
             "    }",
         ]
     lines += ["}", ""]
@@ -240,17 +141,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("mesh_dict", type=Path)
     parser.add_argument("profiles_csv", type=Path)
     parser.add_argument(
-        "--centerlines",
-        type=Path,
-        default=None,
-        help=(
-            "centerline VTP enabling narrow-vessel cone refinement. OFF by "
-            "default: on the supplied geometries the refinement-level "
-            "transitions it introduces on the wall patch damage the extruded "
-            "solid far more than the faceting it removes"
-        ),
-    )
-    parser.add_argument(
         "--cells-per-radius",
         type=positive_float,
         default=3.0,
@@ -261,20 +151,20 @@ def parse_args() -> argparse.Namespace:
         type=positive_float,
         default=4.0,
         help=(
-            "refinement sphere radius as a multiple of the profile radius. The "
-            "sphere is centred on the extended rim, and a flow extension is "
-            "itself one diameter long, so a factor of 2 would reach only back "
-            "to the original rim and cover none of the feeder vessel"
+            "refinement sphere radius as a multiple of the profile radius "
+            "(default: 4). The sphere is centred on the extended rim, and a "
+            "flow extension of one diameter is itself two radii long, so the "
+            "sphere must span at least that to reach the cap's feeder vessel. "
+            "Shorten the extensions and this should come down with them"
         ),
     )
     parser.add_argument(
-        "--cone-radius-factor",
-        type=positive_float,
-        default=1.5,
+        "--maximum-refinement-levels",
+        type=int,
+        default=1,
         help=(
-            "narrow-vessel cone radius as a multiple of the local vessel radius "
-            "(default: 1.5). Only the wall needs covering, so this stays much "
-            "tighter than the outlet spheres, which must also span the extension"
+            "most octree levels any refinement may add below maxCellSize "
+            "(default: 1, so refined cells are at most half the global size)"
         ),
     )
     parser.add_argument(
@@ -298,28 +188,28 @@ def main() -> int:
     max_cell_size = read_max_cell_size(text)
     profiles = read_profiles(profiles_csv)
 
-    cones = []
-    if args.centerlines is not None:
-        centerlines = args.centerlines.expanduser().resolve()
-        if not centerlines.is_file():
-            raise FileNotFoundError(centerlines)
-        cones = cone_refinements(
-            read_centerlines(centerlines),
-            max_cell_size,
-            args.cells_per_radius,
-            args.cone_radius_factor,
-        )
 
     # A profile only needs refining when the cell size it wants is finer than
     # the global one; larger vessels are already resolved.
+    #
+    # The requested size is snapped to one of cfMesh's octree levels rather than
+    # passed through. cfMesh can only halve, so it satisfies a request by taking
+    # the first level at or below it: asking for r/3 = 0.4997 against a global
+    # size of 1 does not give 0.5, it gives 0.25, which is twice the intended
+    # resolution and eight times the cells. Levels are then capped, because a
+    # refined patch of wall that is much finer than its surroundings leaves a
+    # size transition sharp enough to behave as a separate surface.
     refined: list[tuple[dict[str, float], float]] = []
     for profile in profiles:
         wanted = profile["radius"] / args.cells_per_radius
         if wanted >= max_cell_size:
             continue
-        refined.append((profile, max(wanted, args.minimum_cell_size)))
+        levels = math.ceil(math.log2(max_cell_size / wanted))
+        levels = min(max(levels, 1), args.maximum_refinement_levels)
+        cell_size = max(max_cell_size / (2.0**levels), args.minimum_cell_size)
+        refined.append((profile, cell_size))
 
-    if not refined and not cones:
+    if not refined:
         updated = remove_existing_block(text)
         if updated != text:
             write_atomically(mesh_dict, updated)
@@ -330,14 +220,14 @@ def main() -> int:
         return 0
 
     updated = remove_existing_block(text).rstrip("\n") + "\n\n"
-    updated += build_block(refined, args.sphere_radius_factor, cones)
+    updated += build_block(refined, args.sphere_radius_factor)
     write_atomically(mesh_dict, updated)
 
-    sizes = [cell_size for _, cell_size in refined] + [c["cellSize"] for c in cones]
+    sizes = [cell_size for _, cell_size in refined]
     print(
-        f"Refined {len(refined)} small outlet(s) of {len(profiles)} and "
-        f"{len(cones)} narrow vessel segment(s) to cell sizes "
-        f"{min(sizes):.3g}-{max(sizes):.3g}, against maxCellSize {max_cell_size:g}"
+        f"Refined {len(refined)} small outlet(s) of {len(profiles)} to cell "
+        f"sizes {min(sizes):.3g}-{max(sizes):.3g}, against maxCellSize "
+        f"{max_cell_size:g}"
     )
     return 0
 

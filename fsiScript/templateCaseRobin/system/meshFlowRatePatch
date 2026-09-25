@@ -1,0 +1,15 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+Description
+    Sums the mesh swept-volume flux (meshPhi) over a patch. Companion to
+    flowRatePatch, which does the same for phi. For a kinematically consistent
+    moving wall the two must be equal.
+\*---------------------------------------------------------------------------*/
+
+name    <patchName>;
+
+#includeEtc "caseDicts/postProcessing/surfaceFieldValue/patch.cfg"
+
+fields      (meshPhi);
+operation   sum;
+
+// ************************************************************************* //

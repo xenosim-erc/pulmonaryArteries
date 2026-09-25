@@ -36,7 +36,7 @@ processor
         type            zeroGradient;
     }
 
-    "auto.*"
+    "outlet.*"
     {
         type            inletOutlet;
         inletValue      $internalField;

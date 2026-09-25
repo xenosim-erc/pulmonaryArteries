@@ -88,35 +88,34 @@ cell size, and `add_refinements.py` adds the local refinement each geometry
 needs. Nothing is placed by hand, so the dictionary carries no coordinates tied
 to one anatomy; any `objectRefinements` block already present is replaced.
 
-- **Outlets.** A cap only a few cells across cannot be separated from the vessel
-  wall by `autoPatch`. It merges into the wall, and the merged faces then have
-  no counterpart on the uncapped surface that supplies the wall thickness, so
-  `mapExtrudeDistance` fails. Each small profile gets a sphere, centred on its
-  extended rim with a radius of `--sphere-radius-factor` times the profile
-  radius. That factor defaults to 4 rather than 2 because a flow extension is
-  itself one diameter long, so a smaller sphere covers only the extension and
-  none of the feeder vessel behind it.
-- **Narrow branches.** A Cartesian mesh snapped to a tube six or seven cells
-  across leaves faceted corners on the wall, and offsetting those corners
-  produces the convex-crease defects described above. The centerlines carry a
-  radius at every point, so narrow branches are refined by cone segments
-  following the vessel. Required sizes are quantised to cfMesh's octree levels
-  so a branch becomes a few cones rather than hundreds of spheres.
+- **Outlets.** A cap only a few cells across is meshed shut: the opening never
+  appears in the volume mesh, so the case silently loses a boundary condition
+  and the faces that should have carried it merge into the wall. Each small
+  profile gets a sphere, centred on its extended rim with a radius of
+  `--sphere-radius-factor` times the profile radius. That factor defaults to 4
+  rather than 2 because a flow extension is itself one diameter long, so a
+  smaller sphere covers only the extension and none of the feeder vessel behind
+  it.
+Sizes are driven by `--cells-per-radius` (default 3), the number of cells wanted
+across a vessel radius, and quantised to one of cfMesh's octree levels: cfMesh
+can only halve, so it satisfies a request by taking the first level at or below
+it, and asking for a size a hair under half the global one silently gives a
+quarter. `--maximum-refinement-levels` (default 1) then caps how far below
+`maxCellSize` any refinement may go, because a patch of wall much finer than its
+surroundings leaves a size transition that damages the solid extrusion.
 
-Both are driven by `--cells-per-radius` (default 5), which is the number of
-cells wanted across a vessel radius. Three was the earlier default and proved
-too coarse: it leaves only six cells across a diameter, enough for the meshed
-wall to reach dihedral angles of 70 to 80 degrees where the input surface is
-smooth at 30 to 45. Raising it to 5 refines roughly a tenth of the lumen and
-adds on the order of 30% more cells on the supplied geometries.
+Refining narrow branches along their length was tried and removed: the
+refinement-level transitions it left on the wall patch did far more harm than
+the faceting it removed.
 
 Every open profile is then extended along its centerline direction by
-`--extension-diameters` local diameters (default 0.5). Each extension blends
-the real, generally non-circular profile into a circular rim over
-`--extension-transition-ratio` of its length (default 0.8); a short extension
-needs a large value, since the blend gradient is what a short extension makes
-steep, and on a large irregular profile a steep blend leaves a crease sharp
-enough to fold the solid extrusion. The extensions terminate
+`--extension-diameters` local diameters (default 1). VMTK always resamples the
+rim into a circle, and the surface is blended into that circle over most of the
+extension's length; a shorter extension makes that blend steeper, and on a large
+irregular profile such as the main pulmonary artery a steep blend leaves a crease
+sharp enough to fold the solid extrusion. Shortening the extensions therefore
+means re-checking the refinement sphere size, which is set relative to the
+extension. The extensions terminate
 in circular, planar rims, which makes capping exact, moves the inlet and outlet
 boundary conditions away from the bifurcations, and gives the extruded solid end
 rings that are planar and normal to the vessel axis, as the symmetry patches
@@ -128,13 +127,45 @@ it was given, so consistent winding is re-established afterwards. Without that
 step the surface reaches cfMesh carrying more than a thousand apparent creases
 that are really opposed normals, and they end up as defects in the solid.
 
+### Patch names and types
+
+Every patch is named at the capping stage, not inferred from the volume mesh
+afterwards. The VMTK capper tags each cap with its own entity id, which becomes
+one named `solid` block in the capped ASCII STL, one named region in the FMS and
+one named cfMesh patch: the largest region is `wall`, the cap on the largest
+profile is `inlet` and the rest are `outlet1..N`. Nothing has to guess which
+faces belong to which opening, and the outlets keep their individual identities
+for the Windkessel conditions.
+
+Types are set in the same place. An STL carries no patch type, so the FMS leaves
+every region `empty` and cfMesh then writes them all out as walls. The FMS
+header is the only place this can be corrected, because cfMesh copies each
+surface region's geometric type straight onto the mesh patch it creates from it,
+so `meshing.sh` rewrites that header after `surfaceFeatureEdges`: only the
+vessel wall is a `wall`, every opening is a plain `patch`. `meshDict`'s
+`renameBoundary` cannot do this job - it requires a `newName` for every entry,
+and giving the outlets a shared name merges them into a single patch.
+
+### Coupling formulation
+
+The Dirichlet-Neumann and Robin-Neumann formulations need different conditions
+on the interface, so each has its own case template: `templateCase` and
+`templateCaseRobin`. `--coupling dirichlet|robin` selects one, and without it
+the workflow asks when run interactively, defaulting to Dirichlet.
+
+A Robin case is named with a `Robin` suffix, so `h08.stl` gives `run/h08` for
+Dirichlet and `run/h08Robin` for Robin and both can be generated from the same
+geometry without colliding.
+
 ## What is version-controlled
 
 - `geometries/`: input STL surfaces
 - `pythonScripts/`: VTK/VMTK geometry-processing utilities
 - `templateMesh/`: reusable cfMesh and wall-extrusion case files
-- `templateCase/`: reusable solids4foam case files
+- `templateCase/`: reusable solids4foam case files, Dirichlet-Neumann coupling
+- `templateCaseRobin/`: the same, for Robin-Neumann coupling
 - `meshing.sh`: the end-to-end meshing driver
+- `MESHING_STEPS.txt`: every step of the workflow, one line each
 - `environment.yml`: the Python dependency specification
 
 The local Conda installation and environment (`.env/`), intermediate meshing
