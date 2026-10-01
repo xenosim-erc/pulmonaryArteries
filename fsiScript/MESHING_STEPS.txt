@@ -96,13 +96,21 @@ CASE ASSEMBLY
 37. Copy the case template              templateCaseRobin (default) or templateCase into
                                         run/<name>; refuses to overwrite.
 38. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
-39. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
+39. Point the inlet at its waveform    0/fluid/U reads humanFlow or pigFlow from
+                                        constant/fluid/inletFlow, per --species (asked for;
+                                        default human). endTime is set to --heartbeats
+                                        (asked for; default 3) times the cycle length, the
+                                        last time in that file.
+40. Set the core count                 numberOfSubdomains in every decomposeParDict and
+                                        --ntasks in run.slurm, per --cores (asked for;
+                                        default 16); prints fluid cells per processor.
+41. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
                                         outlets by area^(k/2), k = --flow-split-exponent
                                         (default 2), into 0/fluid/windkesselOutlets.
-40. Scale the run-case meshes           transformPoints -scale on both regions, by
+42. Scale the run-case meshes           transformPoints -scale on both regions, by
                                         --scale-factor (asked for; default 0.001, mm to m).
                                         The intermediate meshes keep the STL units.
-41. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+43. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
 
 
 AFTERWARDS - NOT DONE BY THE SCRIPT

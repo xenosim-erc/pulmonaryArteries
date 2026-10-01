@@ -185,6 +185,30 @@ A Robin case is named with a `Robin` suffix, so `h08.stl` gives `run/h08` for
 Dirichlet and `run/h08Robin` for Robin and both can be generated from the same
 geometry without colliding.
 
+### Inlet flow rate
+
+The inlet is a `flowRateInletVelocity` whose volumetric flow rate is a
+`tableFile`: one cardiac cycle of `(time flowRate)` pairs in m^3/s, repeated
+for as long as the run lasts. Each template carries a human cycle
+(`humanFlow`, 0.86 s) and a porcine one (`pigFlow`, 0.66 s) in
+`constant/fluid/inletFlow`. The workflow asks which species the case is, or
+reads `--species human|porcine`, and points `0/fluid/U` at the matching file.
+The files are kept out of `0/` because OpenFOAM tries to read every file there
+as a field.
+
+It also asks how many heartbeats to run, or reads `--heartbeats` (default 3),
+and sets `endTime` in `system/controlDict` to that many cycles. The cycle
+length is the last time in the waveform file, so 3 heartbeats is 2.58 s for a
+human case and 1.98 s for a porcine one.
+
+### Parallel decomposition
+
+The workflow asks for a core count, or reads `--cores` (default 16). It sets
+`numberOfSubdomains` in `system/decomposeParDict` and in the fluid and solid
+copies of that file, and sets `#SBATCH --ntasks` in `run.slurm` to match. It
+then prints the fluid cell count from `checkMesh` and the approximate number of
+cells per processor, to help judge whether the core count suits the mesh.
+
 ### Outlet Windkessel parameters
 
 Every outlet is a three-element Windkessel (`windkesselPressure`). The workflow

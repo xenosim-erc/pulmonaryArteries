@@ -149,6 +149,7 @@ if [[ $# -eq 0 ]]; then
     echo "       [--coupling robin|dirichlet] [--scale-factor VALUE]" >&2
     echo "       [--wk-proximal-resistance VALUE] [--wk-distal-resistance VALUE]" >&2
     echo "       [--wk-compliance VALUE] [--flow-split-exponent VALUE]" >&2
+    echo "       [--species human|porcine] [--heartbeats N] [--cores N]" >&2
     exit 2
 fi
 
@@ -171,6 +172,9 @@ wk_proximal_resistance=""
 wk_distal_resistance=""
 wk_compliance=""
 flow_split_exponent="2"
+species=""
+heartbeats=""
+cores=""
 cells_per_radius="3.0"
 sphere_radius_factor="4.0"
 maximum_refinement_levels="1"
@@ -301,6 +305,39 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --flow-split-exponent=*)
             flow_split_exponent="${argument#*=}"
             ;;
+        --species)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --species requires a value" >&2
+                exit 2
+            }
+            species="${arguments[$index]}"
+            ;;
+        --species=*)
+            species="${argument#*=}"
+            ;;
+        --heartbeats)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --heartbeats requires a value" >&2
+                exit 2
+            }
+            heartbeats="${arguments[$index]}"
+            ;;
+        --heartbeats=*)
+            heartbeats="${argument#*=}"
+            ;;
+        --cores)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --cores requires a value" >&2
+                exit 2
+            }
+            cores="${arguments[$index]}"
+            ;;
+        --cores=*)
+            cores="${argument#*=}"
+            ;;
         --cells-per-radius)
             index=$((index + 1))
             [[ $index -lt ${#arguments[@]} ]] || {
@@ -428,6 +465,66 @@ fi
 require_positive_number "$scale_factor" --scale-factor
 echo "Mesh scale factor: $scale_factor"
 
+# The inlet flow-rate waveform differs between species. Each template carries
+# one cycle of both in constant/fluid/inletFlow, and the inlet in 0/fluid/U is
+# pointed at the matching file once the run case exists.
+if [[ -z "$species" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Species, human or porcine [human]: " species
+    fi
+    species="${species:-human}"
+fi
+case "${species,,}" in
+    h|human)
+        species="human"
+        inlet_flow_file="humanFlow"
+        ;;
+    p|pig|porcine)
+        species="porcine"
+        inlet_flow_file="pigFlow"
+        ;;
+    *)
+        echo "Error: --species must be 'human' or 'porcine', not '$species'" >&2
+        exit 2
+        ;;
+esac
+if [[ ! -f "$case_template/constant/fluid/inletFlow/$inlet_flow_file" ]]; then
+    echo "Error: inlet flow file not found: $case_template/constant/fluid/inletFlow/$inlet_flow_file" >&2
+    exit 1
+fi
+echo "Species: $species (inlet flow: $inlet_flow_file)"
+
+# Run a whole number of cardiac cycles. The cycle length is the last time in
+# the waveform file, so a replaced waveform needs no change here.
+if [[ -z "$heartbeats" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Number of heartbeats to run [3]: " heartbeats
+    fi
+    heartbeats="${heartbeats:-3}"
+fi
+require_positive_number "$heartbeats" --heartbeats
+cycle_period="$(awk '
+    $1 == "(" && $2 ~ /^[0-9.eE+-]+$/ { last = $2 }
+    END { print last }
+' "$case_template/constant/fluid/inletFlow/$inlet_flow_file")"
+require_positive_number "$cycle_period" "the cycle length in $inlet_flow_file"
+end_time="$(awk -v n="$heartbeats" -v t="$cycle_period" 'BEGIN { printf "%.10g", n * t }')"
+echo "Heartbeats: $heartbeats x ${cycle_period} s, endTime $end_time"
+
+# Both regions are decomposed into the same number of subdomains, and the
+# Slurm job asks for one task per subdomain.
+if [[ -z "$cores" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Number of cores [16]: " cores
+    fi
+    cores="${cores:-16}"
+fi
+if [[ ! "$cores" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --cores must be a positive whole number, not '$cores'" >&2
+    exit 2
+fi
+echo "Cores: $cores"
+
 # Three-element Windkessel totals for the whole distal bed, in SI units. They
 # are split across the outlets by area once the run case exists; see
 # pythonScripts/windkessel_outlets.py. Pressing Enter accepts the defaults.
@@ -466,10 +563,10 @@ geometry_arguments=("${arguments[0]}")
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
             ;;
         *)
             geometry_arguments+=("$argument")
@@ -921,6 +1018,45 @@ EOF
     echo "Created coupled run case in: $run_case"
     echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
     echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
+
+    # Point the inlet at the waveform for the chosen species.
+    run_velocity="$run_case/0/fluid/U"
+    sed -i -E "s#(file[[:space:]]+\"<constant>/fluid/inletFlow/)[A-Za-z]+(\";)#\1$inlet_flow_file\2#" \
+        "$run_velocity"
+    if ! grep -q "<constant>/fluid/inletFlow/$inlet_flow_file\";" "$run_velocity"; then
+        echo "Error: could not point the inlet in $run_velocity at $inlet_flow_file" >&2
+        exit 1
+    fi
+    echo "Inlet flow rate read from: constant/fluid/inletFlow/$inlet_flow_file"
+
+    run_control_dict="$run_case/system/controlDict"
+    sed -i -E "s/^([[:space:]]*endTime[[:space:]]+)[^;]*;/\1$end_time;/" "$run_control_dict"
+    if ! grep -Eq "^[[:space:]]*endTime[[:space:]]+$end_time;" "$run_control_dict"; then
+        echo "Error: could not set endTime in $run_control_dict" >&2
+        exit 1
+    fi
+    echo "Set endTime to $end_time s ($heartbeats heartbeat(s))"
+
+    for decompose_dict in "$run_case"/system/decomposeParDict \
+                          "$run_case"/system/{fluid,solid}/decomposeParDict; do
+        [[ -f "$decompose_dict" ]] || continue
+        sed -i -E "s/^([[:space:]]*numberOfSubdomains[[:space:]]+)[0-9]+;/\1$cores;/" \
+            "$decompose_dict"
+        if ! grep -Eq "^[[:space:]]*numberOfSubdomains[[:space:]]+$cores;" "$decompose_dict"; then
+            echo "Error: could not set numberOfSubdomains in $decompose_dict" >&2
+            exit 1
+        fi
+    done
+    if [[ -f "$run_case/run.slurm" ]]; then
+        sed -i -E "s/^(#SBATCH[[:space:]]+--ntasks=)[0-9]+/\1$cores/" "$run_case/run.slurm"
+    fi
+    fluid_cells="$(awk '$1 == "cells:" { print $2; exit }' "$fluid_case/log.checkMesh")"
+    echo "Decomposing both regions into $cores subdomains"
+    if [[ "$fluid_cells" =~ ^[0-9]+$ ]]; then
+        echo "  Fluid cells: $fluid_cells, about $(( (fluid_cells + cores / 2) / cores )) per processor"
+    else
+        echo "  Warning: could not read the fluid cell count from $fluid_case/log.checkMesh" >&2
+    fi
 
     # Split the Windkessel totals across the outlets by area. The fragment is
     # included by 0/fluid/p, where its named entries override "outlet.*".
