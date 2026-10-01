@@ -138,7 +138,7 @@ require_positive_number() {
 # invalid command-line usage.
 if [[ $# -eq 0 ]]; then
     echo "Usage: $0 INPUT.stl [--gaussian-sigma VALUE] [--extrusion-percentage VALUE]" >&2
-    echo "       [--output-dir DIR] [--prefix NAME] [--skip-centerlines]" >&2
+    echo "       [--output-dir DIR] [--prefix NAME]" >&2
     echo "       [--smoothing-iterations N] [--smoothing-passband VALUE]" >&2
     echo "       [--extension-diameters VALUE] [--no-saddle-smoothing]" >&2
     echo "       [--saddle-safety-factor VALUE]" >&2
@@ -163,7 +163,6 @@ input_name="$(basename -- "$1")"
 case_name="${input_name%.*}"
 output_prefix="$case_name"
 output_dir=""
-skip_centerlines=false
 gaussian_sigma=""
 extrusion_percentage=""
 coupling=""
@@ -215,7 +214,8 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             output_prefix="${argument#*=}"
             ;;
         --skip-centerlines)
-            skip_centerlines=true
+            echo "Error: --skip-centerlines was removed; the run case needs the centerlines" >&2
+            exit 2
             ;;
         --gaussian-sigma)
             index=$((index + 1))
@@ -400,24 +400,22 @@ done
 # corresponding options were omitted. Pressing Enter accepts the displayed
 # defaults. Batch jobs have no terminal on stdin, so they use the same defaults
 # without waiting; pass explicit flags in a job script for other values.
-if [[ "$skip_centerlines" == false ]]; then
-    if [[ -z "$gaussian_sigma" ]]; then
-        if [[ -t 0 ]]; then
-            read -r -p "Gaussian smoothing sigma [10.0]: " gaussian_sigma
-        fi
-        gaussian_sigma="${gaussian_sigma:-10.0}"
+if [[ -z "$gaussian_sigma" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Gaussian smoothing sigma [10.0]: " gaussian_sigma
     fi
-
-    if [[ -z "$extrusion_percentage" ]]; then
-        if [[ -t 0 ]]; then
-            read -r -p "Extrusion percentage [5.0]: " extrusion_percentage
-        fi
-        extrusion_percentage="${extrusion_percentage:-5.0}"
-    fi
-
-    echo "Gaussian smoothing sigma: $gaussian_sigma"
-    echo "Extrusion percentage: $extrusion_percentage%"
+    gaussian_sigma="${gaussian_sigma:-10.0}"
 fi
+
+if [[ -z "$extrusion_percentage" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Extrusion percentage [5.0]: " extrusion_percentage
+    fi
+    extrusion_percentage="${extrusion_percentage:-5.0}"
+fi
+
+echo "Gaussian smoothing sigma: $gaussian_sigma"
+echo "Extrusion percentage: $extrusion_percentage%"
 
 # The two formulations need different interface conditions, so each has its own
 # case template. Robin cases are named with a Robin suffix so both can be
@@ -451,6 +449,17 @@ if [[ ! -d "$case_template" ]]; then
     exit 1
 fi
 echo "FSI coupling: $coupling (template: $(basename -- "$case_template"))"
+
+# The run case is named after the input geometry (for example, p16.stl creates
+# run/p16Robin). Refuse to merge with an existing case, because old mesh files
+# could remain and produce a case that does not match the new geometry. This is
+# checked now, before any meshing, so a clash does not waste a full run.
+run_case="$RUN_DIR/${case_name}${case_suffix}"
+if [[ -e "$run_case" ]]; then
+    echo "Error: run case already exists: $run_case" >&2
+    echo "Move or remove it before rerunning meshing.sh." >&2
+    exit 1
+fi
 
 # The geometry is meshed in its native STL units (millimetres for the supplied
 # scans), and solids4foam expects metres. The finished run-case meshes are
@@ -528,38 +537,37 @@ echo "Cores: $cores"
 # Three-element Windkessel totals for the whole distal bed, in SI units. They
 # are split across the outlets by area once the run case exists; see
 # pythonScripts/windkessel_outlets.py. Pressing Enter accepts the defaults.
-if [[ "$skip_centerlines" == false ]]; then
-    if [[ -z "$wk_proximal_resistance" ]]; then
-        if [[ -t 0 ]]; then
-            read -r -p "Total proximal resistance Rp, Pa s/m^3 [3.3e6]: " wk_proximal_resistance
-        fi
-        wk_proximal_resistance="${wk_proximal_resistance:-3.3e6}"
+if [[ -z "$wk_proximal_resistance" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Total proximal resistance Rp, Pa s/m^3 [3.3e6]: " wk_proximal_resistance
     fi
-    if [[ -z "$wk_distal_resistance" ]]; then
-        if [[ -t 0 ]]; then
-            read -r -p "Total distal resistance Rd, Pa s/m^3 [2e7]: " wk_distal_resistance
-        fi
-        wk_distal_resistance="${wk_distal_resistance:-2e7}"
-    fi
-    if [[ -z "$wk_compliance" ]]; then
-        if [[ -t 0 ]]; then
-            read -r -p "Total compliance C, m^3/Pa [3.5e-8]: " wk_compliance
-        fi
-        wk_compliance="${wk_compliance:-3.5e-8}"
-    fi
-    require_positive_number "$wk_proximal_resistance" --wk-proximal-resistance
-    require_positive_number "$wk_distal_resistance" --wk-distal-resistance
-    require_positive_number "$wk_compliance" --wk-compliance
-    require_positive_number "$flow_split_exponent" --flow-split-exponent
-    echo "Windkessel totals: Rp $wk_proximal_resistance, Rd $wk_distal_resistance, C $wk_compliance"
-    echo "Outlet flow split: Q ~ r^$flow_split_exponent"
+    wk_proximal_resistance="${wk_proximal_resistance:-3.3e6}"
 fi
+if [[ -z "$wk_distal_resistance" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Total distal resistance Rd, Pa s/m^3 [2e7]: " wk_distal_resistance
+    fi
+    wk_distal_resistance="${wk_distal_resistance:-2e7}"
+fi
+if [[ -z "$wk_compliance" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Total compliance C, m^3/Pa [3.5e-8]: " wk_compliance
+    fi
+    wk_compliance="${wk_compliance:-3.5e-8}"
+fi
+require_positive_number "$wk_proximal_resistance" --wk-proximal-resistance
+require_positive_number "$wk_distal_resistance" --wk-distal-resistance
+require_positive_number "$wk_compliance" --wk-compliance
+require_positive_number "$flow_split_exponent" --flow-split-exponent
+echo "Windkessel totals: Rp $wk_proximal_resistance, Rd $wk_distal_resistance, C $wk_compliance"
+echo "Outlet flow split: Q ~ r^$flow_split_exponent"
 
 # Both stages need the Gaussian and extrusion options: Gauss.py turns them into
 # the wall thickness, and pulmonary_centerlines.py uses the same numbers to set
 # the saddle-rounding target. Strip whichever form the caller used, then append
 # the resolved values once, so an interactively entered value is passed on too.
 geometry_arguments=("${arguments[0]}")
+passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
@@ -568,18 +576,25 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
             ;;
+        # Forwarded to Python, but already shown in the settings summary.
+        --output-dir|--prefix)
+            geometry_arguments+=("$argument" "${arguments[$((index + 1))]}")
+            index=$((index + 1))
+            ;;
+        --output-dir=*|--prefix=*)
+            geometry_arguments+=("$argument")
+            ;;
         *)
             geometry_arguments+=("$argument")
+            passthrough_arguments+=("$argument")
             ;;
     esac
 done
 
-if [[ "$skip_centerlines" == false ]]; then
-    geometry_arguments+=(
-        --gaussian-sigma "$gaussian_sigma"
-        --extrusion-percentage "$extrusion_percentage"
-    )
-fi
+geometry_arguments+=(
+    --gaussian-sigma "$gaussian_sigma"
+    --extrusion-percentage "$extrusion_percentage"
+)
 
 # With no explicit output directory, derive the case name from the first
 # argument (the input STL). For example, artery.stl becomes:
@@ -599,6 +614,50 @@ output_dir="$($FSI_PYTHON -c \
     'from pathlib import Path; import sys; print(Path(sys.argv[1]).expanduser().resolve())' \
     "$output_dir")"
 echo "Output directory: $output_dir"
+
+# Every resolved setting, one "name: value" per line. Shown before the long
+# meshing run and recorded in the run case as meshing.params.
+print_settings() {
+    printf '%-28s %s\n' \
+        "Input geometry:" "${arguments[0]}" \
+        "Run case:" "$run_case" \
+        "Meshing directory:" "$output_dir" \
+        "FSI coupling:" "$coupling" \
+        "Gaussian sigma:" "$gaussian_sigma" \
+        "Extrusion percentage:" "$extrusion_percentage" \
+        "Thickness smoothing passes:" "$thickness_smoothing_passes" \
+        "Cells per radius:" "$cells_per_radius" \
+        "Sphere radius factor:" "$sphere_radius_factor" \
+        "Max refinement levels:" "$maximum_refinement_levels" \
+        "Max mapping distance:" "$max_mapping_distance" \
+        "Mesh scale factor:" "$scale_factor" \
+        "Species:" "$species ($inlet_flow_file)" \
+        "Heartbeats:" "$heartbeats x $cycle_period s (endTime $end_time)" \
+        "Cores:" "$cores" \
+        "Windkessel Rp [Pa s/m^3]:" "$wk_proximal_resistance" \
+        "Windkessel Rd [Pa s/m^3]:" "$wk_distal_resistance" \
+        "Windkessel C [m^3/Pa]:" "$wk_compliance" \
+        "Flow-split exponent:" "$flow_split_exponent"
+    if (( ${#passthrough_arguments[@]} > 0 )); then
+        printf '%-28s %s\n' "Other geometry options:" "${passthrough_arguments[*]}"
+    fi
+}
+
+echo
+echo "Settings"
+echo "--------"
+print_settings
+echo
+if [[ -t 0 ]]; then
+    read -r -p "Proceed with meshing? [Y/n]: " proceed
+    case "${proceed,,}" in
+        ""|y|yes) ;;
+        *)
+            echo "Stopped before meshing; nothing was written."
+            exit 0
+            ;;
+    esac
+fi
 
 # Run only this command with PYTHONPATH and LD_LIBRARY_PATH removed so OpenFOAM
 # cannot inject an incompatible Python package or shared VTK library. Setting
@@ -796,51 +855,49 @@ if ! awk '
 fi
 echo "Created empty solid-extrusion back patch 'outerWall'."
 
-# Centerline output is intentionally absent when --skip-centerlines is used.
-# Otherwise, export the file just generated above to a CSV with the same prefix.
-if [[ "$skip_centerlines" == false ]]; then
-    centerline_vtp="$output_dir/${output_prefix}_centerlines.vtp"
-    centerline_csv="$output_dir/${output_prefix}_centerlines.csv"
+# Export the centerlines just generated above to a CSV with the same prefix.
+centerline_vtp="$output_dir/${output_prefix}_centerlines.vtp"
+centerline_csv="$output_dir/${output_prefix}_centerlines.csv"
 
-    env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
-        "$FSI_PYTHON" "$CSV_SCRIPT" "$centerline_vtp" "$centerline_csv"
+env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
+    "$FSI_PYTHON" "$CSV_SCRIPT" "$centerline_vtp" "$centerline_csv"
 
-    # Map the smoothed local diameter and percentage-based wall thickness to
-    # the uncapped inner surface for subsequent extrusion or solid-wall steps.
-    uncapped_vtp="$output_dir/${output_prefix}_uncapped.vtp"
-    thickness_vtk="$output_dir/${output_prefix}_wall_thickness.vtk"
-    env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
-        "$FSI_PYTHON" "$GAUSS_SCRIPT" \
-        "$uncapped_vtp" "$centerline_csv" "$thickness_vtk" \
-        --gaussian-sigma "$gaussian_sigma" \
-        --extrusion-percentage "$extrusion_percentage" \
-        --thickness-smoothing-passes "$thickness_smoothing_passes"
+# Map the smoothed local diameter and percentage-based wall thickness to
+# the uncapped inner surface for subsequent extrusion or solid-wall steps.
+uncapped_vtp="$output_dir/${output_prefix}_uncapped.vtp"
+thickness_vtk="$output_dir/${output_prefix}_wall_thickness.vtk"
+env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
+    "$FSI_PYTHON" "$GAUSS_SCRIPT" \
+    "$uncapped_vtp" "$centerline_csv" "$thickness_vtk" \
+    --gaussian-sigma "$gaussian_sigma" \
+    --extrusion-percentage "$extrusion_percentage" \
+    --thickness-smoothing-passes "$thickness_smoothing_passes"
 
-    # mapExtrudeDistance reads thickMap.vtk from the current OpenFOAM case by
-    # default and writes the pointScalarField 0/WallThickness for the wall
-    # extrusion stage.
-    thick_map="$fluid_case/thickMap.vtk"
-    mv -f "$thickness_vtk" "$thick_map"
-    run_step "Mapping wall thickness onto the fluid wall..." "$fluid_case" \
-        log.mapExtrudeDistance "$MAP_EXTRUDE_DISTANCE" \
-        -maxDistance "$max_mapping_distance"
-    echo "  Mapped from: $thick_map"
-    echo "  mapExtrudeDistance log: $fluid_case/log.mapExtrudeDistance"
+# mapExtrudeDistance reads thickMap.vtk from the current OpenFOAM case by
+# default and writes the pointScalarField 0/WallThickness for the wall
+# extrusion stage.
+thick_map="$fluid_case/thickMap.vtk"
+mv -f "$thickness_vtk" "$thick_map"
+run_step "Mapping wall thickness onto the fluid wall..." "$fluid_case" \
+    log.mapExtrudeDistance "$MAP_EXTRUDE_DISTANCE" \
+    -maxDistance "$max_mapping_distance"
+echo "  Mapped from: $thick_map"
+echo "  mapExtrudeDistance log: $fluid_case/log.mapExtrudeDistance"
 
-    # Extrude the mapped fluid wall into a separate conformal solid mesh. The
-    # varExtrudeFunc dictionary reads ../fluidMeshing/0/WallThickness and uses
-    # the temporary zero-face outerWall patch for the exposed-patch metadata.
-    solid_case="$output_dir/varExtrudeFunc"
-    run_step "Extruding the solid wall..." "$solid_case" log.varExtrudeMesh \
-        "$VAR_EXTRUDE_MESH"
-    echo "  varExtrudeMesh log: $solid_case/log.varExtrudeMesh"
+# Extrude the mapped fluid wall into a separate conformal solid mesh. The
+# varExtrudeFunc dictionary reads ../fluidMeshing/0/WallThickness and uses
+# the temporary zero-face outerWall patch for the exposed-patch metadata.
+solid_case="$output_dir/varExtrudeFunc"
+run_step "Extruding the solid wall..." "$solid_case" log.varExtrudeMesh \
+    "$VAR_EXTRUDE_MESH"
+echo "  varExtrudeMesh log: $solid_case/log.varExtrudeMesh"
 
-    # varExtrudeMesh no longer needs the temporary zero-face patch. Running
-    # createPatch with an empty operation list removes empty patches while
-    # leaving all non-empty fluid patches unchanged.
-    fluid_cleanup_dict="$fluid_case/system/removeEmptyPatchesDict"
-    {
-        cat <<'EOF'
+# varExtrudeMesh no longer needs the temporary zero-face patch. Running
+# createPatch with an empty operation list removes empty patches while
+# leaving all non-empty fluid patches unchanged.
+fluid_cleanup_dict="$fluid_case/system/removeEmptyPatchesDict"
+{
+    cat <<'EOF'
 FoamFile
 {
     format      ascii;
@@ -851,25 +908,25 @@ FoamFile
 pointSync false;
 patches ();
 EOF
-    } > "$fluid_cleanup_dict"
-    run_step "Removing the temporary fluid patch..." "$fluid_case" \
-        log.removeEmptyPatches "$CREATE_PATCH" -overwrite \
-        -dict system/removeEmptyPatchesDict
+} > "$fluid_cleanup_dict"
+run_step "Removing the temporary fluid patch..." "$fluid_case" \
+    log.removeEmptyPatches "$CREATE_PATCH" -overwrite \
+    -dict system/removeEmptyPatchesDict
 
-    # On the extruded solid, the old outerWall is the conformal fluid-facing
-    # surface and the old wall is the exterior surface. Rename both. The inlet
-    # and auto-named outlets first receive temporary names: createPatch retains
-    # the old type when source and destination names are identical, whereas a
-    # new temporary patch reliably receives the requested generic patch type,
-    # on which the template pins the ends with a fixed displacement.
-    solid_patch_dict="$solid_case/system/solidCreatePatchDict"
-    solid_end_dict="$solid_case/system/solidEndPatchDict"
-    mapfile -t solid_outlet_patch_names < <(
-        patch_sizes "$solid_case/constant/polyMesh/boundary" |
-            awk '$1 ~ /^outlet/ { print $1 }'
-    )
-    {
-        cat <<'EOF'
+# On the extruded solid, the old outerWall is the conformal fluid-facing
+# surface and the old wall is the exterior surface. Rename both. The inlet
+# and auto-named outlets first receive temporary names: createPatch retains
+# the old type when source and destination names are identical, whereas a
+# new temporary patch reliably receives the requested generic patch type,
+# on which the template pins the ends with a fixed displacement.
+solid_patch_dict="$solid_case/system/solidCreatePatchDict"
+solid_end_dict="$solid_case/system/solidEndPatchDict"
+mapfile -t solid_outlet_patch_names < <(
+    patch_sizes "$solid_case/constant/polyMesh/boundary" |
+        awk '$1 ~ /^outlet/ { print $1 }'
+)
+{
+    cat <<'EOF'
 FoamFile
 {
     format      ascii;
@@ -900,8 +957,8 @@ patches
         patches (inlet);
     }
 EOF
-        for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
-            cat <<EOF
+    for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
+        cat <<EOF
     {
         name end_${solid_patch_name}_tmp;
         patchInfo { type patch; }
@@ -909,19 +966,19 @@ EOF
         patches ($solid_patch_name);
     }
 EOF
-        done
-        cat <<'EOF'
+    done
+    cat <<'EOF'
 );
 EOF
-    } > "$solid_patch_dict"
-    run_step "Naming the solid patches..." "$solid_case" log.createPatch \
-        "$CREATE_PATCH" -overwrite -dict system/solidCreatePatchDict
+} > "$solid_patch_dict"
+run_step "Naming the solid patches..." "$solid_case" log.createPatch \
+    "$CREATE_PATCH" -overwrite -dict system/solidCreatePatchDict
 
-    # Restore the public inlet and auto patch names in a second pass. Their
-    # source patches are already generic patches, and explicitly repeating the
-    # type also makes the intended final boundary definition unambiguous.
-    {
-        cat <<'EOF'
+# Restore the public inlet and auto patch names in a second pass. Their
+# source patches are already generic patches, and explicitly repeating the
+# type also makes the intended final boundary definition unambiguous.
+{
+    cat <<'EOF'
 FoamFile
 {
     format      ascii;
@@ -940,8 +997,8 @@ patches
         patches (end_inlet_tmp);
     }
 EOF
-        for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
-            cat <<EOF
+    for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
+        cat <<EOF
     {
         name $solid_patch_name;
         patchInfo { type patch; }
@@ -949,142 +1006,164 @@ EOF
         patches (end_${solid_patch_name}_tmp);
     }
 EOF
-        done
-        cat <<'EOF'
+    done
+    cat <<'EOF'
 );
 EOF
-    } > "$solid_end_dict"
-    run_step "Setting the solid end patches to patch..." "$solid_case" \
-        log.createPatch.ends "$CREATE_PATCH" -overwrite \
-        -dict system/solidEndPatchDict
+} > "$solid_end_dict"
+run_step "Setting the solid end patches to patch..." "$solid_case" \
+    log.createPatch.ends "$CREATE_PATCH" -overwrite \
+    -dict system/solidEndPatchDict
 
-    expected_end_count=$((1 + ${#solid_outlet_patch_names[@]}))
-    verified_end_count="$(awk '
-        /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ {
-            candidate = $1
+expected_end_count=$((1 + ${#solid_outlet_patch_names[@]}))
+verified_end_count="$(awk '
+    /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ {
+        candidate = $1
+    }
+    $1 == "type" && (candidate == "inlet" || candidate ~ /^outlet/) {
+        type = $2
+        sub(/;.*/, "", type)
+        if (type != "patch") {
+            printf "Error: solid patch %s has type %s, expected patch\n", \
+                candidate, type > "/dev/stderr"
+            failed = 1
         }
-        $1 == "type" && (candidate == "inlet" || candidate ~ /^outlet/) {
-            type = $2
-            sub(/;.*/, "", type)
-            if (type != "patch") {
-                printf "Error: solid patch %s has type %s, expected patch\n", \
-                    candidate, type > "/dev/stderr"
-                failed = 1
-            }
-            count++
-        }
-        END {
-            if (failed) exit 1
-            print count + 0
-        }
-    ' "$solid_case/constant/polyMesh/boundary")" || exit 1
-    if (( verified_end_count != expected_end_count )); then
-        echo "Error: expected $expected_end_count solid end patches of type patch, found $verified_end_count" >&2
+        count++
+    }
+    END {
+        if (failed) exit 1
+        print count + 0
+    }
+' "$solid_case/constant/polyMesh/boundary")" || exit 1
+if (( verified_end_count != expected_end_count )); then
+    echo "Error: expected $expected_end_count solid end patches of type patch, found $verified_end_count" >&2
+    exit 1
+fi
+
+echo "Generated solid wall mesh in: $solid_case"
+echo "Removed the temporary zero-face outerWall patch from the fluid mesh."
+echo "Renamed solid outerWall to innerWall and solid wall to outerWall."
+echo "Set the solid inlet and outlet patches to type patch."
+
+# Assemble the coupled FSI run case from the reusable template. The name was
+# checked at startup; check again in case another run has since created it.
+fluid_poly_mesh="$fluid_case/constant/polyMesh"
+solid_poly_mesh="$solid_case/constant/polyMesh"
+
+if [[ ! -d "$fluid_poly_mesh" ]]; then
+    echo "Error: generated fluid polyMesh not found: $fluid_poly_mesh" >&2
+    exit 1
+fi
+if [[ ! -d "$solid_poly_mesh" ]]; then
+    echo "Error: generated solid polyMesh not found: $solid_poly_mesh" >&2
+    exit 1
+fi
+if [[ -e "$run_case" ]]; then
+    echo "Error: run case already exists: $run_case" >&2
+    echo "Move or remove it before rerunning meshing.sh." >&2
+    exit 1
+fi
+
+mkdir -p "$RUN_DIR"
+cp -a "$case_template" "$run_case"
+cp -a "$fluid_poly_mesh" "$run_case/constant/fluid/"
+cp -a "$solid_poly_mesh" "$run_case/constant/solid/"
+
+echo "Created coupled run case in: $run_case"
+echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
+echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
+
+# Point the inlet at the waveform for the chosen species.
+run_velocity="$run_case/0/fluid/U"
+sed -i -E "s#(file[[:space:]]+\"<constant>/fluid/inletFlow/)[A-Za-z]+(\";)#\1$inlet_flow_file\2#" \
+    "$run_velocity"
+if ! grep -q "<constant>/fluid/inletFlow/$inlet_flow_file\";" "$run_velocity"; then
+    echo "Error: could not point the inlet in $run_velocity at $inlet_flow_file" >&2
+    exit 1
+fi
+echo "Inlet flow rate read from: constant/fluid/inletFlow/$inlet_flow_file"
+
+run_control_dict="$run_case/system/controlDict"
+sed -i -E "s/^([[:space:]]*endTime[[:space:]]+)[^;]*;/\1$end_time;/" "$run_control_dict"
+if ! grep -Eq "^[[:space:]]*endTime[[:space:]]+$end_time;" "$run_control_dict"; then
+    echo "Error: could not set endTime in $run_control_dict" >&2
+    exit 1
+fi
+echo "Set endTime to $end_time s ($heartbeats heartbeat(s))"
+
+for decompose_dict in "$run_case"/system/decomposeParDict \
+                      "$run_case"/system/{fluid,solid}/decomposeParDict; do
+    [[ -f "$decompose_dict" ]] || continue
+    sed -i -E "s/^([[:space:]]*numberOfSubdomains[[:space:]]+)[0-9]+;/\1$cores;/" \
+        "$decompose_dict"
+    if ! grep -Eq "^[[:space:]]*numberOfSubdomains[[:space:]]+$cores;" "$decompose_dict"; then
+        echo "Error: could not set numberOfSubdomains in $decompose_dict" >&2
         exit 1
     fi
+done
+if [[ -f "$run_case/run.slurm" ]]; then
+    job_name="$(basename -- "$run_case")"
+    sed -i -E -e "s/^(#SBATCH[[:space:]]+--ntasks=)[0-9]+/\1$cores/" \
+        -e "s|^(#SBATCH[[:space:]]+--job-name=).*|\1${job_name//|/_}|" \
+        "$run_case/run.slurm"
+fi
+fluid_cells="$(awk '$1 == "cells:" { print $2; exit }' "$fluid_case/log.checkMesh")"
+echo "Decomposing both regions into $cores subdomains"
+if [[ "$fluid_cells" =~ ^[0-9]+$ ]]; then
+    echo "  Fluid cells: $fluid_cells, about $(( (fluid_cells + cores / 2) / cores )) per processor"
+else
+    echo "  Warning: could not read the fluid cell count from $fluid_case/log.checkMesh" >&2
+fi
 
-    echo "Generated solid wall mesh in: $solid_case"
-    echo "Removed the temporary zero-face outerWall patch from the fluid mesh."
-    echo "Renamed solid outerWall to innerWall and solid wall to outerWall."
-    echo "Set the solid inlet and outlet patches to type patch."
+# Split the Windkessel totals across the outlets by area. The fragment is
+# the only definition of the outlet conditions, included by 0/fluid/p.
+windkessel_file="$run_case/0/fluid/windkesselOutlets"
+echo "Splitting the Windkessel totals across the outlets..."
+"$FSI_PYTHON" "$WINDKESSEL_SCRIPT" "$profiles_csv" "$windkessel_file" \
+    --proximal-resistance "$wk_proximal_resistance" \
+    --distal-resistance "$wk_distal_resistance" \
+    --compliance "$wk_compliance" \
+    --exponent "$flow_split_exponent" \
+    --transport-properties "$run_case/constant/fluid/transportProperties" \
+    | tee "$run_case/log.windkesselOutlets"
 
-    # Assemble the coupled FSI run case from the reusable template. The case is
-    # named after the input geometry (for example, p16.stl creates run/p16).
-    # Refuse to merge with an existing case because old mesh files could remain
-    # and produce a run case that does not match the newly generated geometry.
-    run_case="$RUN_DIR/${case_name}${case_suffix}"
-    fluid_poly_mesh="$fluid_case/constant/polyMesh"
-    solid_poly_mesh="$solid_case/constant/polyMesh"
-
-    if [[ ! -d "$fluid_poly_mesh" ]]; then
-        echo "Error: generated fluid polyMesh not found: $fluid_poly_mesh" >&2
-        exit 1
-    fi
-    if [[ ! -d "$solid_poly_mesh" ]]; then
-        echo "Error: generated solid polyMesh not found: $solid_poly_mesh" >&2
-        exit 1
-    fi
-    if [[ -e "$run_case" ]]; then
-        echo "Error: run case already exists: $run_case" >&2
-        echo "Move or remove it before rerunning meshing.sh." >&2
-        exit 1
-    fi
-
-    mkdir -p "$RUN_DIR"
-    cp -a "$case_template" "$run_case"
-    cp -a "$fluid_poly_mesh" "$run_case/constant/fluid/"
-    cp -a "$solid_poly_mesh" "$run_case/constant/solid/"
-
-    echo "Created coupled run case in: $run_case"
-    echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
-    echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
-
-    # Point the inlet at the waveform for the chosen species.
-    run_velocity="$run_case/0/fluid/U"
-    sed -i -E "s#(file[[:space:]]+\"<constant>/fluid/inletFlow/)[A-Za-z]+(\";)#\1$inlet_flow_file\2#" \
-        "$run_velocity"
-    if ! grep -q "<constant>/fluid/inletFlow/$inlet_flow_file\";" "$run_velocity"; then
-        echo "Error: could not point the inlet in $run_velocity at $inlet_flow_file" >&2
-        exit 1
-    fi
-    echo "Inlet flow rate read from: constant/fluid/inletFlow/$inlet_flow_file"
-
-    run_control_dict="$run_case/system/controlDict"
-    sed -i -E "s/^([[:space:]]*endTime[[:space:]]+)[^;]*;/\1$end_time;/" "$run_control_dict"
-    if ! grep -Eq "^[[:space:]]*endTime[[:space:]]+$end_time;" "$run_control_dict"; then
-        echo "Error: could not set endTime in $run_control_dict" >&2
-        exit 1
-    fi
-    echo "Set endTime to $end_time s ($heartbeats heartbeat(s))"
-
-    for decompose_dict in "$run_case"/system/decomposeParDict \
-                          "$run_case"/system/{fluid,solid}/decomposeParDict; do
-        [[ -f "$decompose_dict" ]] || continue
-        sed -i -E "s/^([[:space:]]*numberOfSubdomains[[:space:]]+)[0-9]+;/\1$cores;/" \
-            "$decompose_dict"
-        if ! grep -Eq "^[[:space:]]*numberOfSubdomains[[:space:]]+$cores;" "$decompose_dict"; then
-            echo "Error: could not set numberOfSubdomains in $decompose_dict" >&2
+# Scale only the run-case copies, so the intermediate meshes keep the STL
+# units and stay consistent with the thickness map and surfaces beside them.
+if awk -v value="$scale_factor" 'BEGIN { exit !(value + 0 != 1) }'; then
+    # No log is kept: the output is only shown if transformPoints fails.
+    for region in fluid solid; do
+        echo "Scaling the $region mesh by $scale_factor..."
+        if ! transform_output="$(cd "$run_case" && "$TRANSFORM_POINTS" \
+                -region "$region" -scale "$scale_factor" 2>&1)"; then
+            printf '%s\n' "$transform_output" >&2
+            echo "Error: step failed: scaling the $region mesh" >&2
             exit 1
         fi
     done
-    if [[ -f "$run_case/run.slurm" ]]; then
-        sed -i -E "s/^(#SBATCH[[:space:]]+--ntasks=)[0-9]+/\1$cores/" "$run_case/run.slurm"
-    fi
-    fluid_cells="$(awk '$1 == "cells:" { print $2; exit }' "$fluid_case/log.checkMesh")"
-    echo "Decomposing both regions into $cores subdomains"
-    if [[ "$fluid_cells" =~ ^[0-9]+$ ]]; then
-        echo "  Fluid cells: $fluid_cells, about $(( (fluid_cells + cores / 2) / cores )) per processor"
-    else
-        echo "  Warning: could not read the fluid cell count from $fluid_case/log.checkMesh" >&2
-    fi
-
-    # Split the Windkessel totals across the outlets by area. The fragment is
-    # included by 0/fluid/p, where its named entries override "outlet.*".
-    windkessel_file="$run_case/0/fluid/windkesselOutlets"
-    echo "Splitting the Windkessel totals across the outlets..."
-    "$FSI_PYTHON" "$WINDKESSEL_SCRIPT" "$profiles_csv" "$windkessel_file" \
-        --proximal-resistance "$wk_proximal_resistance" \
-        --distal-resistance "$wk_distal_resistance" \
-        --compliance "$wk_compliance" \
-        --exponent "$flow_split_exponent" \
-        --transport-properties "$run_case/constant/fluid/transportProperties" \
-        | tee "$run_case/log.windkesselOutlets"
-
-    # Scale only the run-case copies, so the intermediate meshes keep the STL
-    # units and stay consistent with the thickness map and surfaces beside them.
-    if awk -v value="$scale_factor" 'BEGIN { exit !(value + 0 != 1) }'; then
-        for region in fluid solid; do
-            run_step "Scaling the $region mesh by $scale_factor..." "$run_case" \
-                "log.transformPoints.$region" "$TRANSFORM_POINTS" \
-                -region "$region" -scale "$scale_factor"
-        done
-        echo "Scaled both run-case meshes by $scale_factor."
-    else
-        echo "Scale factor is 1; run-case meshes left in STL units."
-    fi
+    echo "Scaled both run-case meshes by $scale_factor."
 else
-    echo "Skipping CSV and wall-thickness mapping because --skip-centerlines was supplied."
+    echo "Scale factor is 1; run-case meshes left in STL units."
 fi
+
+# Record how this case was made, so a result can be traced back to its inputs
+# or the case regenerated exactly.
+params_file="$run_case/meshing.params"
+{
+    echo "# Written by meshing.sh on $(date '+%Y-%m-%d %H:%M:%S')"
+    printf '# Command:'
+    printf ' %q' "$0" "${arguments[@]}"
+    printf '\n'
+    if commit="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)"; then
+        if ! git -C "$SCRIPT_DIR" diff --quiet HEAD -- . 2>/dev/null; then
+            commit="$commit (with uncommitted changes)"
+        fi
+        echo "# Repository commit: $commit"
+    fi
+    echo
+    print_settings
+    printf '%-28s %s\n' "Fluid cells:" "${fluid_cells:-unknown}"
+} > "$params_file"
+echo "Recorded the settings in: $params_file"
 
 
 # Offer to remove only the intermediate caseFiles directory created for this
@@ -1108,7 +1187,14 @@ elif [[ "$output_dir" != "$case_files_dir" ]]; then
     echo "Retained custom meshing output directory: $output_dir"
 fi
 
-echo "Note"
-echo "make sure that mesh is in units of metres (check the scale factor: $scale_factor)"
-echo "First check with any issues for self-intersection of the solid mesh"
-echo "Try smoothing the mesh or a lower extrusion percentage if this is the case"
+echo
+echo "Run case ready: $run_case"
+echo "Settings recorded in: $params_file"
+echo
+echo "Next steps:"
+echo "  cd $run_case"
+echo "  checkMesh -region solid    # look for self-intersection at the bifurcations"
+echo "  sbatch run.slurm"
+echo
+echo "If the solid self-intersects, rerun with a smaller --extrusion-percentage"
+echo "or more smoothing."

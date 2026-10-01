@@ -26,22 +26,29 @@ boundaryField
     {
       type processor;
     }
-    "outlet.*"
-    {
-      //type fixedValue;
-      //value uniform 1.26;
-           type        windkesselPressure;
- 	   R           2.2e8;
-	   Rch         3.88e7;
-	   C           3.18e-9;
-	   rho         1060;  
-
-           value       uniform 0;
-    }
-    // Per-outlet Windkessel values split from the totals by outlet area. The
-    // file is written by meshing.sh (pythonScripts/windkessel_outlets.py); its
-    // named entries take precedence over the "outlet.*" fallback above.
-    #sinclude "windkesselOutlets"
+    // Outlets: three-element Windkessel (windkesselPressure), one entry per
+    // outlet, included from windkesselOutlets. meshing.sh writes that file with
+    // pythonScripts/windkessel_outlets.py by splitting the total Rp, Rd and C
+    // across the outlets by flow fraction f_i = A_i^(k/2) / sum A^(k/2):
+    //
+    //     Rch_i = Rp / f_i   R_i = Rd / f_i   (inversely proportional to f_i)
+    //     C_i   = C * f_i                     (directly proportional to f_i)
+    //
+    // so a larger outlet gets lower resistance and higher compliance, and the
+    // outlets in parallel add back up to the totals. The uniform block below is
+    // the old single-value setup, kept for reference only: the included
+    // per-outlet entries replace it.
+    //
+    // "outlet.*"
+    // {
+    //     type        windkesselPressure;
+    //     R           2.2e8;
+    //     Rch         3.88e7;
+    //     C           3.18e-9;
+    //     rho         1060;
+    //     value       uniform 0;
+    // }
+    #include "windkesselOutlets"
     inlet
     {
       type zeroGradient;

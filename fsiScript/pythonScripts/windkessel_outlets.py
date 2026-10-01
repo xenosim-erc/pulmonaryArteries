@@ -12,13 +12,20 @@ Murray's law. Outlet i then gets
 
     Rch_i = Rp / f_i,    R_i = Rd / f_i,    C_i = C * f_i
 
-so the outlets in parallel reproduce the totals exactly, and every outlet keeps
-the time constant R_i C_i = Rd C of the whole bed. Only area ratios are used,
-so the areas may be in any unit.
+The two resistances are inversely proportional to the flow fraction and the
+compliance directly proportional to it, so a larger outlet gets less resistance
+and more compliance and draws more of the flow. The outlets in parallel
+reproduce the totals exactly, and every outlet keeps the time constant
+R_i C_i = Rd C of the whole bed. Only area ratios are used, so the areas may be
+in any unit.
+
+As a check, the values as written are recombined in parallel (resistances
+1 / sum(1/R_i), compliance sum(C_i)) and compared with the totals; a mismatch
+beyond rounding stops the script.
 
 The result is written as a dictionary fragment of per-outlet patch entries,
-which the template's 0/fluid/p includes. Explicit patch names take precedence
-over the template's "outlet.*" entry, which remains as a fallback.
+which the template's 0/fluid/p includes. That include is the only definition
+of the outlet conditions; the old uniform "outlet.*" entry is commented out.
 """
 
 from __future__ import annotations
@@ -30,6 +37,10 @@ import re
 import sys
 from pathlib import Path
 
+
+# Values are written to 6 significant figures, so recombining them can drift
+# from the totals by about 1e-6; anything larger means the split is wrong.
+CHECK_TOLERANCE = 1e-4
 
 RHO = re.compile(r"(?m)^[ \t]*rho\b[^;]*?(?P<value>[0-9.eE+-]+)[ \t]*;")
 
@@ -120,14 +131,19 @@ def main() -> int:
         f"//   Rp = {args.proximal_resistance:g} Pa s/m^3, "
         f"Rd = {args.distal_resistance:g} Pa s/m^3, C = {args.compliance:g} m^3/Pa",
         f"//   flow split Q ~ r^{args.exponent:g}, rho = {rho:g}",
+        "//   Rch = Rp/f and R = Rd/f (inversely proportional to the flow",
+        "//   fraction f); C = C*f (directly proportional to it).",
         "",
     ]
     print(f"{'Outlet':<10} {'flow fraction':>13} {'Rch':>12} {'R':>12} {'C':>12}")
+    written = []
     for (name, _), weight in zip(outlets, weights):
         fraction = weight / total_weight
-        rch = args.proximal_resistance / fraction
-        r = args.distal_resistance / fraction
-        c = args.compliance * fraction
+        # Round once here so the check below uses exactly what the file holds.
+        rch = float(f"{args.proximal_resistance / fraction:.6g}")
+        r = float(f"{args.distal_resistance / fraction:.6g}")
+        c = float(f"{args.compliance * fraction:.6g}")
+        written.append((fraction, rch, r, c))
         print(f"{name:<10} {fraction:>13.4f} {rch:>12.4g} {r:>12.4g} {c:>12.4g}")
         lines += [
             f"{name}",
@@ -142,6 +158,34 @@ def main() -> int:
             "}",
             "",
         ]
+
+    # Recombine the outlets in parallel and compare with the requested totals.
+    checks = [
+        ("Proximal resistance Rp", "Pa s/m^3", args.proximal_resistance,
+         1.0 / sum(1.0 / rch for _, rch, _, _ in written)),
+        ("Distal resistance Rd", "Pa s/m^3", args.distal_resistance,
+         1.0 / sum(1.0 / r for _, _, r, _ in written)),
+        ("Compliance C", "m^3/Pa", args.compliance,
+         sum(c for _, _, _, c in written)),
+        ("Sum of flow fractions", "", 1.0,
+         sum(fraction for fraction, _, _, _ in written)),
+    ]
+    print()
+    print("Check: totals recombined from the per-outlet values")
+    print(f"{'Quantity':<24} {'requested':>12} {'recombined':>12} {'rel. error':>11}")
+    failed = []
+    for label, unit, requested, recombined in checks:
+        error = abs(recombined - requested) / requested
+        print(f"{label:<24} {requested:>12.6g} {recombined:>12.6g} {error:>11.1e}"
+              + (f"  {unit}" if unit else ""))
+        if error > CHECK_TOLERANCE:
+            failed.append(label)
+    if failed:
+        raise RuntimeError(
+            "recombined totals do not match the requested ones: " + ", ".join(failed)
+        )
+    print(f"All within {CHECK_TOLERANCE:g}: the outlets reproduce the requested totals.")
+    print()
 
     output = args.output.expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)

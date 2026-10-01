@@ -14,8 +14,12 @@ PRE-FLIGHT
  3. Check the templates exist          templateMesh and templateCase directories.
  4. Check the meshing utilities        surfaceFeatureEdges, cartesianMesh, checkMesh,
                                        createPatch, mapExtrudeDistance, varExtrudeMesh.
- 5. Read the command line              Prompt for Gaussian sigma and extrusion percentage
-                                       if not supplied and a terminal is attached.
+ 5. Read the command line              Prompt for every setting not supplied (wall model,
+                                       coupling, scale, species, heartbeats, cores,
+                                       Windkessel totals) if a terminal is attached.
+ 5a. Check the run case name           Stop now if run/<name> already exists, before any
+                                       meshing is done.
+ 5b. Confirm the settings              Print every resolved setting and ask to proceed.
 
 
 GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
@@ -94,7 +98,7 @@ SOLID MESH
 CASE ASSEMBLY
 -------------
 37. Copy the case template              templateCaseRobin (default) or templateCase into
-                                        run/<name>; refuses to overwrite.
+                                        run/<name>; the name is checked again here.
 38. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
 39. Point the inlet at its waveform    0/fluid/U reads humanFlow or pigFlow from
                                         constant/fluid/inletFlow, per --species (asked for;
@@ -104,13 +108,20 @@ CASE ASSEMBLY
 40. Set the core count                 numberOfSubdomains in every decomposeParDict and
                                         --ntasks in run.slurm, per --cores (asked for;
                                         default 16); prints fluid cells per processor.
+                                        The Slurm job is named after the run case.
 41. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
                                         outlets by area^(k/2), k = --flow-split-exponent
-                                        (default 2), into 0/fluid/windkesselOutlets.
+                                        (default 2), into 0/fluid/windkesselOutlets. The
+                                        outlets are recombined in parallel and checked
+                                        against the totals; see log.windkesselOutlets.
 42. Scale the run-case meshes           transformPoints -scale on both regions, by
                                         --scale-factor (asked for; default 0.001, mm to m).
-                                        The intermediate meshes keep the STL units.
-43. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+                                        The intermediate meshes keep the STL units. No
+                                        log is kept; the output is shown only on failure.
+43. Record the settings                 run/<name>/meshing.params: the command line, the
+                                        repository commit and every resolved setting.
+44. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+45. Print the next steps                cd into the case, check the solid mesh, sbatch.
 
 
 AFTERWARDS - NOT DONE BY THE SCRIPT

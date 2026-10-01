@@ -201,11 +201,24 @@ and sets `endTime` in `system/controlDict` to that many cycles. The cycle
 length is the last time in the waveform file, so 3 heartbeats is 2.58 s for a
 human case and 1.98 s for a porcine one.
 
+### Settings and provenance
+
+When run interactively, `meshing.sh` prompts for every setting not given as a
+flag, prints the full list, and asks for confirmation before it starts meshing.
+It stops straight away, before any meshing, if `run/<name>` already exists.
+Each run case gets a `meshing.params` file recording the command line, the
+repository commit (marked if there were uncommitted changes) and every resolved
+setting, so a result can be traced back to its inputs.
+
+Both templates use `startFrom latestTime`, so if a Slurm job hits its time
+limit, resubmitting `run.slurm` carries on from the last written time.
+
 ### Parallel decomposition
 
 The workflow asks for a core count, or reads `--cores` (default 16). It sets
 `numberOfSubdomains` in `system/decomposeParDict` and in the fluid and solid
-copies of that file, and sets `#SBATCH --ntasks` in `run.slurm` to match. It
+copies of that file, and sets `#SBATCH --ntasks` in `run.slurm` to match. The
+Slurm job is named after the run case. It
 then prints the fluid cell count from `checkMesh` and the approximate number of
 cells per processor, to help judge whether the core count suits the mesh.
 
@@ -224,10 +237,19 @@ Murray's law.
 
 `pythonScripts/windkessel_outlets.py` writes these values to
 `0/fluid/windkesselOutlets`, using the outlet areas in `<prefix>_profiles.csv`.
-`0/fluid/p` includes that file. Its named entries override the template's
-uniform `"outlet.*"` entry, which is used only if the file is missing. To try
+`0/fluid/p` includes that file, and it is the only definition of the outlet
+conditions: the template's old uniform `"outlet.*"` entry is commented out and
+kept for reference only, so a case missing the file fails at startup rather
+than running with uniform outlets. The resistances are inversely proportional
+to an outlet's flow fraction and the compliance directly proportional, so a
+larger outlet gets less resistance and more compliance. To try
 different totals on an existing case, rerun the script on that case rather
 than editing the values by hand.
+
+As a check, the script recombines the values it wrote: the resistances in
+parallel (`1 / sum(1/R_i)`) and the compliances summed. It compares the results
+with the requested totals and stops if any differs by more than 1e-4. The
+comparison table is printed and saved in the run case's `log.windkesselOutlets`.
 
 ### Mesh units
 

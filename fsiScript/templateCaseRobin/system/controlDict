@@ -19,7 +19,7 @@ libs            ("libwindkesselPressure.so");
 
 application     solids4Foam;
 
-startFrom      startTime;//latestTime; // startTime;
+startFrom       latestTime;
 
 startTime       0;
 
