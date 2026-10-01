@@ -118,9 +118,9 @@ means re-checking the refinement sphere size, which is set relative to the
 extension. The extensions terminate
 in circular, planar rims, which makes capping exact, moves the inlet and outlet
 boundary conditions away from the bifurcations, and gives the extruded solid end
-rings that are planar and normal to the vessel axis, as the symmetry patches
-assigned to them require. Profiles are capped with a triangle fan around a new
-centre point, and that fan is then rebuilt.
+rings that are planar and normal to the vessel axis, where the solid is pinned.
+Profiles are capped with a triangle fan around a new centre point, and that fan
+is then rebuilt.
 
 A fan is not a mesh. VMTK resamples each rim into a regular polygon before
 fanning it, so every cap arrives as a ring of congruent slivers: on p16 that is
@@ -178,12 +178,21 @@ and giving the outlets a shared name merges them into a single patch.
 
 The Dirichlet-Neumann and Robin-Neumann formulations need different conditions
 on the interface, so each has its own case template: `templateCase` and
-`templateCaseRobin`. `--coupling dirichlet|robin` selects one, and without it
-the workflow asks when run interactively, defaulting to Dirichlet.
+`templateCaseRobin`. `--coupling robin|dirichlet` selects one, and without it
+the workflow asks when run interactively, defaulting to Robin.
 
 A Robin case is named with a `Robin` suffix, so `h08.stl` gives `run/h08` for
 Dirichlet and `run/h08Robin` for Robin and both can be generated from the same
 geometry without colliding.
+
+### Mesh units
+
+The geometry is meshed in its STL units (millimetres for the supplied scans),
+but the solver templates are SI. Once both meshes are copied into the run case
+they are scaled with `transformPoints -scale`, by `--scale-factor` (default
+`0.001`, asked for when run interactively). A factor of `1` leaves them
+unscaled. Only the run-case copies are scaled; the meshes in `caseFiles/` keep
+the STL units.
 
 ## What is version-controlled
 

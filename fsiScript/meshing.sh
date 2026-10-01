@@ -28,6 +28,7 @@ CHECK_MESH="${CHECK_MESH:-checkMesh}"
 MAP_EXTRUDE_DISTANCE="${MAP_EXTRUDE_DISTANCE:-mapExtrudeDistance}"
 CREATE_PATCH="${CREATE_PATCH:-createPatch}"
 VAR_EXTRUDE_MESH="${VAR_EXTRUDE_MESH:-varExtrudeMesh}"
+TRANSFORM_POINTS="${TRANSFORM_POINTS:-transformPoints}"
 
 # Use the repository's fsi-env Python by default. If an HPC user stores the
 # environment elsewhere, an existing FSI_PYTHON environment variable overrides
@@ -95,7 +96,7 @@ fi
 for required_utility in \
     "$CARTESIAN_MESH" "$CHECK_MESH" "$MAP_EXTRUDE_DISTANCE" \
     "$CREATE_PATCH" \
-    "$VAR_EXTRUDE_MESH"; do
+    "$VAR_EXTRUDE_MESH" "$TRANSFORM_POINTS"; do
     if ! command -v "$required_utility" >/dev/null 2>&1; then
         echo "Error: required meshing utility not found: $required_utility" >&2
         exit 1
@@ -128,7 +129,7 @@ if [[ $# -eq 0 ]]; then
     echo "       [--sphere-radius-factor VALUE]" >&2
     echo "       [--thickness-smoothing-passes N]" >&2
     echo "       [--max-mapping-distance VALUE] [--maximum-refinement-levels N]" >&2
-    echo "       [--coupling dirichlet|robin]" >&2
+    echo "       [--coupling robin|dirichlet] [--scale-factor VALUE]" >&2
     exit 2
 fi
 
@@ -146,6 +147,7 @@ skip_centerlines=false
 gaussian_sigma=""
 extrusion_percentage=""
 coupling=""
+scale_factor=""
 cells_per_radius="3.0"
 sphere_radius_factor="4.0"
 maximum_refinement_levels="1"
@@ -220,6 +222,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --coupling=*)
             coupling="${argument#*=}"
+            ;;
+        --scale-factor)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --scale-factor requires a value" >&2
+                exit 2
+            }
+            scale_factor="${arguments[$index]}"
+            ;;
+        --scale-factor=*)
+            scale_factor="${argument#*=}"
             ;;
         --cells-per-radius)
             index=$((index + 1))
@@ -307,9 +320,9 @@ fi
 # generated from one geometry without colliding.
 if [[ -z "$coupling" ]]; then
     if [[ -t 0 ]]; then
-        read -r -p "FSI coupling, dirichlet or robin [dirichlet]: " coupling
+        read -r -p "FSI coupling, robin or dirichlet [robin]: " coupling
     fi
-    coupling="${coupling:-dirichlet}"
+    coupling="${coupling:-robin}"
 fi
 
 case "${coupling,,}" in
@@ -335,6 +348,24 @@ if [[ ! -d "$case_template" ]]; then
 fi
 echo "FSI coupling: $coupling (template: $(basename -- "$case_template"))"
 
+# The geometry is meshed in its native STL units (millimetres for the supplied
+# scans), and solids4foam expects metres. The finished run-case meshes are
+# scaled by this factor with transformPoints; 1 leaves them unscaled. It is
+# asked for here rather than at the end so an interactive run does not stall.
+if [[ -z "$scale_factor" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Mesh scale factor applied to the run case [0.001]: " scale_factor
+    fi
+    scale_factor="${scale_factor:-0.001}"
+fi
+if ! awk -v value="$scale_factor" 'BEGIN {
+        exit !(value ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && value + 0 > 0)
+    }'; then
+    echo "Error: --scale-factor must be a positive number, not '$scale_factor'" >&2
+    exit 2
+fi
+echo "Mesh scale factor: $scale_factor"
+
 # Both stages need the Gaussian and extrusion options: Gauss.py turns them into
 # the wall thickness, and pulmonary_centerlines.py uses the same numbers to set
 # the saddle-rounding target. Strip whichever form the caller used, then append
@@ -343,10 +374,10 @@ geometry_arguments=("${arguments[0]}")
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
+        --coupling|--scale-factor|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
             index=$((index + 1))
             ;;
-        --coupling=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
+        --coupling=*|--scale-factor=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
             ;;
         *)
             geometry_arguments+=("$argument")
@@ -640,9 +671,10 @@ EOF
     # surface and the old wall is the exterior surface. Rename both. The inlet
     # and auto-named outlets first receive temporary names: createPatch retains
     # the old type when source and destination names are identical, whereas a
-    # new temporary patch reliably receives the requested symmetry type.
+    # new temporary patch reliably receives the requested generic patch type,
+    # on which the template pins the ends with a fixed displacement.
     solid_patch_dict="$solid_case/system/solidCreatePatchDict"
-    solid_symmetry_dict="$solid_case/system/solidSymmetryPatchDict"
+    solid_end_dict="$solid_case/system/solidEndPatchDict"
     mapfile -t solid_outlet_patch_names < <(
         patch_sizes "$solid_case/constant/polyMesh/boundary" |
             awk '$1 ~ /^outlet/ { print $1 }'
@@ -673,8 +705,8 @@ patches
         patches (wall);
     }
     {
-        name symmetry_inlet_tmp;
-        patchInfo { type symmetry; }
+        name end_inlet_tmp;
+        patchInfo { type patch; }
         constructFrom patches;
         patches (inlet);
     }
@@ -682,8 +714,8 @@ EOF
         for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
             cat <<EOF
     {
-        name symmetry_${solid_patch_name}_tmp;
-        patchInfo { type symmetry; }
+        name end_${solid_patch_name}_tmp;
+        patchInfo { type patch; }
         constructFrom patches;
         patches ($solid_patch_name);
     }
@@ -697,7 +729,7 @@ EOF
         "$CREATE_PATCH" -overwrite -dict system/solidCreatePatchDict
 
     # Restore the public inlet and auto patch names in a second pass. Their
-    # source patches are already symmetry patches, and explicitly repeating the
+    # source patches are already generic patches, and explicitly repeating the
     # type also makes the intended final boundary definition unambiguous.
     {
         cat <<'EOF'
@@ -714,39 +746,39 @@ patches
 (
     {
         name inlet;
-        patchInfo { type symmetry; }
+        patchInfo { type patch; }
         constructFrom patches;
-        patches (symmetry_inlet_tmp);
+        patches (end_inlet_tmp);
     }
 EOF
         for solid_patch_name in "${solid_outlet_patch_names[@]}"; do
             cat <<EOF
     {
         name $solid_patch_name;
-        patchInfo { type symmetry; }
+        patchInfo { type patch; }
         constructFrom patches;
-        patches (symmetry_${solid_patch_name}_tmp);
+        patches (end_${solid_patch_name}_tmp);
     }
 EOF
         done
         cat <<'EOF'
 );
 EOF
-    } > "$solid_symmetry_dict"
-    run_step "Setting the solid end patches to symmetry..." "$solid_case" \
-        log.createPatch.symmetry "$CREATE_PATCH" -overwrite \
-        -dict system/solidSymmetryPatchDict
+    } > "$solid_end_dict"
+    run_step "Setting the solid end patches to patch..." "$solid_case" \
+        log.createPatch.ends "$CREATE_PATCH" -overwrite \
+        -dict system/solidEndPatchDict
 
-    expected_symmetry_count=$((1 + ${#solid_outlet_patch_names[@]}))
-    verified_symmetry_count="$(awk '
+    expected_end_count=$((1 + ${#solid_outlet_patch_names[@]}))
+    verified_end_count="$(awk '
         /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/ {
             candidate = $1
         }
         $1 == "type" && (candidate == "inlet" || candidate ~ /^outlet/) {
             type = $2
             sub(/;.*/, "", type)
-            if (type != "symmetry") {
-                printf "Error: solid patch %s has type %s, expected symmetry\n", \
+            if (type != "patch") {
+                printf "Error: solid patch %s has type %s, expected patch\n", \
                     candidate, type > "/dev/stderr"
                 failed = 1
             }
@@ -757,15 +789,15 @@ EOF
             print count + 0
         }
     ' "$solid_case/constant/polyMesh/boundary")" || exit 1
-    if (( verified_symmetry_count != expected_symmetry_count )); then
-        echo "Error: expected $expected_symmetry_count solid symmetry patches, found $verified_symmetry_count" >&2
+    if (( verified_end_count != expected_end_count )); then
+        echo "Error: expected $expected_end_count solid end patches of type patch, found $verified_end_count" >&2
         exit 1
     fi
 
     echo "Generated solid wall mesh in: $solid_case"
     echo "Removed the temporary zero-face outerWall patch from the fluid mesh."
     echo "Renamed solid outerWall to innerWall and solid wall to outerWall."
-    echo "Changed the solid inlet and outlet patches to symmetry."
+    echo "Set the solid inlet and outlet patches to type patch."
 
     # Assemble the coupled FSI run case from the reusable template. The case is
     # named after the input geometry (for example, p16.stl creates run/p16).
@@ -797,6 +829,19 @@ EOF
     echo "Created coupled run case in: $run_case"
     echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
     echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
+
+    # Scale only the run-case copies, so the intermediate meshes keep the STL
+    # units and stay consistent with the thickness map and surfaces beside them.
+    if awk -v value="$scale_factor" 'BEGIN { exit !(value + 0 != 1) }'; then
+        for region in fluid solid; do
+            run_step "Scaling the $region mesh by $scale_factor..." "$run_case" \
+                "log.transformPoints.$region" "$TRANSFORM_POINTS" \
+                -region "$region" -scale "$scale_factor"
+        done
+        echo "Scaled both run-case meshes by $scale_factor."
+    else
+        echo "Scale factor is 1; run-case meshes left in STL units."
+    fi
 else
     echo "Skipping CSV and wall-thickness mapping because --skip-centerlines was supplied."
 fi
@@ -824,6 +869,6 @@ elif [[ "$output_dir" != "$case_files_dir" ]]; then
 fi
 
 echo "Note"
-echo "make sure that mesh is in units of metres (or else)"
+echo "make sure that mesh is in units of metres (check the scale factor: $scale_factor)"
 echo "First check with any issues for self-intersection of the solid mesh"
 echo "Try smoothing the mesh or a lower extrusion percentage if this is the case"

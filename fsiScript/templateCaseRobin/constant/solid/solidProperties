@@ -16,43 +16,33 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-//solidModel linearGeometry;
-solidModel linearGeometryTotalDisplacement;
+//solidModel     linearGeometryTotalDisplacement;
+solidModel     nonLinearGeometryTotalLagrangianTotalDisplacement;
 //solidModel nonLinearGeometryUpdatedLagrangian;
 
-"linearGeometryCoeffs|linearGeometryTotalDisplacementCoeffs|nonLinearGeometryUpdatedLagrangianCoeffs"
+"linearGeometryTotalDisplacementCoeffs|nonLinearGeometryTotalLagrangianTotalDisplacementCoeffs"
 {
+    // Solution algorithm
+    //solutionAlgorithm implicitSegregated;
     solutionAlgorithm PETScSNES;
+    //solutionAlgorithm explicit;
 
-    // Maximum number of momentum correctors
-    // nCorrectors             5000;
+    // PETSc options file used by PETScSNES
+    //optionsFile petscOptions.hypre;
 
-    // Solution tolerance for displacement
-    solutionTolerance       1e-06;
-
-    // Alternative solution tolerance for displacement
-    alternativeTolerance    1e-06;
-
-    // Material law solution tolerance
-    materialTolerance       1e-06;
-
-    // Write frequency for the residuals
-    infoFrequency           100;
-
-    // Predict displacement field at the start of a time step using the velocity
-    predictor               yes;
+    // Predictor D at the start of a new time step using U and A
+    predictor yes;
 
     stabilisation
     {
 
-        momentum
+      momentum
         {
             type        RhieChow;
             //type        alpha;
             scaleFactor 0.5;
         }
     }
-
 }
 
 // ************************************************************************* //

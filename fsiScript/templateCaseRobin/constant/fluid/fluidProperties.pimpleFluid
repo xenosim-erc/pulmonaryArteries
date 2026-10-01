@@ -11,46 +11,16 @@ FoamFile
 {
     version     2.0;
     format      ascii;
-    class       volVectorField;
-    object      D;
+    class       dictionary;
+    object      fluidProperties;
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-dimensions      [0 1 0 0 0 0 0];
+fluidModel pimpleFluid;
 
-internalField   uniform (0 0 0);
-
-boundaryField
+pimpleFluidCoeffs
 {
-   processor
-     {
-       type processor;
-     }
-
-  "outlet.*"
-    {
-      type            fixedDisplacement;//symmetry;
-        value           uniform (0 0 0);
-    }
-    inlet
-    {
-      type            fixedDisplacement;//symmetry;
-        value           uniform (0 0 0);
-    }
-    innerWall
-    {
-        type            solidTraction;
-        traction        uniform ( 0 0 0 );
-        pressure        uniform 0;
-        value           uniform (0 0 0);
-    }
-    outerWall
-    {
-        type            solidTraction;
-        traction        uniform ( 0 0 0 );
-        pressure        uniform 0;
-        value           uniform (0 0 0);
-    }
+    ddtCorr true;
 }
 
 // ************************************************************************* //

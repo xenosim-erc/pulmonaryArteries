@@ -27,14 +27,14 @@ boundaryField
       type processor;
     }
 
-    "auto.*"
+    "outlet.*"
     {
-      type             slip;// fixedValue;
+      type            fixedValue;//slip;
         value           uniform (0 0 0);
     }
     inlet
     {
-      type              slip;//fixedValue;//slip;//fixedValue;
+      type            fixedValue;//slip;
         value           uniform (0 0 0);
     }
     innerWall

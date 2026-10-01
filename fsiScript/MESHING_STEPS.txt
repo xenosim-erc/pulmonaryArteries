@@ -84,22 +84,25 @@ SOLID MESH
 33. Drop the temporary fluid patch      createPatch removes the now-unneeded zero-face patch.
 34. Name the solid walls                Exposed face becomes 'innerWall' (conformal with the
                                         fluid wall), the extruded face 'outerWall'.
-35. Set the solid ends to symmetry      Inlet and outlet rings become symmetry patches, in two
-                                        passes so the type is applied reliably.
-36. Verify the symmetry patches         Confirm the expected count and type were written.
+35. Set the solid ends to patch         Inlet and outlet rings become generic patches (pinned
+                                        by the template), in two passes so the type is applied
+                                        reliably.
+36. Verify the end patches              Confirm the expected count and type were written.
 
 
 CASE ASSEMBLY
 -------------
-37. Copy the case template              templateCase into run/<name>; refuses to overwrite.
+37. Copy the case template              templateCaseRobin (default) or templateCase into
+                                        run/<name>; refuses to overwrite.
 38. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
-39. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+39. Scale the run-case meshes           transformPoints -scale on both regions, by
+                                        --scale-factor (asked for; default 0.001, mm to m).
+                                        The intermediate meshes keep the STL units.
+40. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
 
 
 AFTERWARDS - NOT DONE BY THE SCRIPT
 -----------------------------------
- *  Scale the mesh to metres            The geometry is in millimetres; the solver template is
-                                        SI. Nothing in the workflow converts it.
  *  Check the solid mesh                 checkMesh on constant/solid; look for negative volume
                                         cells at the bifurcations.
  *  Review the case settings             Material properties, Windkessel values per outlet,
