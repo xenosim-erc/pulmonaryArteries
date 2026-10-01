@@ -38,6 +38,10 @@ boundaryField
 
            value       uniform 0;
     }
+    // Per-outlet Windkessel values split from the totals by outlet area. The
+    // file is written by meshing.sh (pythonScripts/windkessel_outlets.py); its
+    // named entries take precedence over the "outlet.*" fallback above.
+    #sinclude "windkesselOutlets"
     inlet
     {
       type zeroGradient;

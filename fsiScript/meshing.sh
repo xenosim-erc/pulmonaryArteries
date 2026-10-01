@@ -15,6 +15,7 @@ CSV_SCRIPT="$SCRIPT_DIR/pythonScripts/centerlines_to_csv.py"
 GAUSS_SCRIPT="$SCRIPT_DIR/pythonScripts/Gauss.py"
 EMPTY_PATCH_SCRIPT="$SCRIPT_DIR/pythonScripts/add_empty_boundary_patch.py"
 REFINEMENT_SCRIPT="$SCRIPT_DIR/pythonScripts/add_refinements.py"
+WINDKESSEL_SCRIPT="$SCRIPT_DIR/pythonScripts/windkessel_outlets.py"
 TEMPLATE_MESH_DIR="$SCRIPT_DIR/templateMesh"
 TEMPLATE_CASE_DIR="$SCRIPT_DIR/templateCase"
 TEMPLATE_CASE_ROBIN_DIR="$SCRIPT_DIR/templateCaseRobin"
@@ -78,6 +79,11 @@ if [[ ! -f "$REFINEMENT_SCRIPT" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$WINDKESSEL_SCRIPT" ]]; then
+    echo "Error: Windkessel split script not found: $WINDKESSEL_SCRIPT" >&2
+    exit 1
+fi
+
 if [[ ! -d "$TEMPLATE_MESH_DIR" ]]; then
     echo "Error: mesh template directory not found: $TEMPLATE_MESH_DIR" >&2
     exit 1
@@ -117,6 +123,17 @@ run_step() {
     fi
 }
 
+# Exit with a usage error unless the value is a plain positive number.
+require_positive_number() {
+    local value="$1" option="$2"
+    if ! awk -v value="$value" 'BEGIN {
+            exit !(value ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && value + 0 > 0)
+        }'; then
+        echo "Error: $option must be a positive number, not '$value'" >&2
+        exit 2
+    fi
+}
+
 # At least the input STL positional argument is required. Exit status 2 denotes
 # invalid command-line usage.
 if [[ $# -eq 0 ]]; then
@@ -130,6 +147,8 @@ if [[ $# -eq 0 ]]; then
     echo "       [--thickness-smoothing-passes N]" >&2
     echo "       [--max-mapping-distance VALUE] [--maximum-refinement-levels N]" >&2
     echo "       [--coupling robin|dirichlet] [--scale-factor VALUE]" >&2
+    echo "       [--wk-proximal-resistance VALUE] [--wk-distal-resistance VALUE]" >&2
+    echo "       [--wk-compliance VALUE] [--flow-split-exponent VALUE]" >&2
     exit 2
 fi
 
@@ -148,6 +167,10 @@ gaussian_sigma=""
 extrusion_percentage=""
 coupling=""
 scale_factor=""
+wk_proximal_resistance=""
+wk_distal_resistance=""
+wk_compliance=""
+flow_split_exponent="2"
 cells_per_radius="3.0"
 sphere_radius_factor="4.0"
 maximum_refinement_levels="1"
@@ -233,6 +256,50 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --scale-factor=*)
             scale_factor="${argument#*=}"
+            ;;
+        --wk-proximal-resistance)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wk-proximal-resistance requires a value" >&2
+                exit 2
+            }
+            wk_proximal_resistance="${arguments[$index]}"
+            ;;
+        --wk-proximal-resistance=*)
+            wk_proximal_resistance="${argument#*=}"
+            ;;
+        --wk-distal-resistance)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wk-distal-resistance requires a value" >&2
+                exit 2
+            }
+            wk_distal_resistance="${arguments[$index]}"
+            ;;
+        --wk-distal-resistance=*)
+            wk_distal_resistance="${argument#*=}"
+            ;;
+        --wk-compliance)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wk-compliance requires a value" >&2
+                exit 2
+            }
+            wk_compliance="${arguments[$index]}"
+            ;;
+        --wk-compliance=*)
+            wk_compliance="${argument#*=}"
+            ;;
+        --flow-split-exponent)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --flow-split-exponent requires a value" >&2
+                exit 2
+            }
+            flow_split_exponent="${arguments[$index]}"
+            ;;
+        --flow-split-exponent=*)
+            flow_split_exponent="${argument#*=}"
             ;;
         --cells-per-radius)
             index=$((index + 1))
@@ -358,13 +425,38 @@ if [[ -z "$scale_factor" ]]; then
     fi
     scale_factor="${scale_factor:-0.001}"
 fi
-if ! awk -v value="$scale_factor" 'BEGIN {
-        exit !(value ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && value + 0 > 0)
-    }'; then
-    echo "Error: --scale-factor must be a positive number, not '$scale_factor'" >&2
-    exit 2
-fi
+require_positive_number "$scale_factor" --scale-factor
 echo "Mesh scale factor: $scale_factor"
+
+# Three-element Windkessel totals for the whole distal bed, in SI units. They
+# are split across the outlets by area once the run case exists; see
+# pythonScripts/windkessel_outlets.py. Pressing Enter accepts the defaults.
+if [[ "$skip_centerlines" == false ]]; then
+    if [[ -z "$wk_proximal_resistance" ]]; then
+        if [[ -t 0 ]]; then
+            read -r -p "Total proximal resistance Rp, Pa s/m^3 [3.3e6]: " wk_proximal_resistance
+        fi
+        wk_proximal_resistance="${wk_proximal_resistance:-3.3e6}"
+    fi
+    if [[ -z "$wk_distal_resistance" ]]; then
+        if [[ -t 0 ]]; then
+            read -r -p "Total distal resistance Rd, Pa s/m^3 [2e7]: " wk_distal_resistance
+        fi
+        wk_distal_resistance="${wk_distal_resistance:-2e7}"
+    fi
+    if [[ -z "$wk_compliance" ]]; then
+        if [[ -t 0 ]]; then
+            read -r -p "Total compliance C, m^3/Pa [3.5e-8]: " wk_compliance
+        fi
+        wk_compliance="${wk_compliance:-3.5e-8}"
+    fi
+    require_positive_number "$wk_proximal_resistance" --wk-proximal-resistance
+    require_positive_number "$wk_distal_resistance" --wk-distal-resistance
+    require_positive_number "$wk_compliance" --wk-compliance
+    require_positive_number "$flow_split_exponent" --flow-split-exponent
+    echo "Windkessel totals: Rp $wk_proximal_resistance, Rd $wk_distal_resistance, C $wk_compliance"
+    echo "Outlet flow split: Q ~ r^$flow_split_exponent"
+fi
 
 # Both stages need the Gaussian and extrusion options: Gauss.py turns them into
 # the wall thickness, and pulmonary_centerlines.py uses the same numbers to set
@@ -374,10 +466,10 @@ geometry_arguments=("${arguments[0]}")
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
             ;;
         *)
             geometry_arguments+=("$argument")
@@ -829,6 +921,18 @@ EOF
     echo "Created coupled run case in: $run_case"
     echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
     echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
+
+    # Split the Windkessel totals across the outlets by area. The fragment is
+    # included by 0/fluid/p, where its named entries override "outlet.*".
+    windkessel_file="$run_case/0/fluid/windkesselOutlets"
+    echo "Splitting the Windkessel totals across the outlets..."
+    "$FSI_PYTHON" "$WINDKESSEL_SCRIPT" "$profiles_csv" "$windkessel_file" \
+        --proximal-resistance "$wk_proximal_resistance" \
+        --distal-resistance "$wk_distal_resistance" \
+        --compliance "$wk_compliance" \
+        --exponent "$flow_split_exponent" \
+        --transport-properties "$run_case/constant/fluid/transportProperties" \
+        | tee "$run_case/log.windkesselOutlets"
 
     # Scale only the run-case copies, so the intermediate meshes keep the STL
     # units and stay consistent with the thickness map and surfaces beside them.

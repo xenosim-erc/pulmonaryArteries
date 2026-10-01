@@ -36,11 +36,12 @@ GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
                                        --extension-diameters, ending in a circular planar rim.
 14. Re-establish winding               The extension filter leaves opposed normals; consistent
                                        winding is restored here.
-15. Re-measure the profiles            The rims have moved; write <prefix>_profiles.csv.
+15. Re-measure the profiles            The rims have moved, so they are measured again.
 16. Cap the surface                    Triangle fan per opening, each tagged with its own
                                        entity id by the VMTK capper.
 17. Name every region                  Largest region becomes 'wall', the cap on the largest
-                                       profile 'inlet', the rest 'outlet1..N'.
+                                       profile 'inlet', the rest 'outlet1..N'. Write
+                                       <prefix>_profiles.csv with each rim's patch name.
 18. Remesh the caps                    The capper leaves each opening as a ring of
                                        congruent slivers fanned to one centre point;
                                        they are rebuilt as isotropic triangles sized
@@ -95,10 +96,13 @@ CASE ASSEMBLY
 37. Copy the case template              templateCaseRobin (default) or templateCase into
                                         run/<name>; refuses to overwrite.
 38. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
-39. Scale the run-case meshes           transformPoints -scale on both regions, by
+39. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
+                                        outlets by area^(k/2), k = --flow-split-exponent
+                                        (default 2), into 0/fluid/windkesselOutlets.
+40. Scale the run-case meshes           transformPoints -scale on both regions, by
                                         --scale-factor (asked for; default 0.001, mm to m).
                                         The intermediate meshes keep the STL units.
-40. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+41. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
 
 
 AFTERWARDS - NOT DONE BY THE SCRIPT

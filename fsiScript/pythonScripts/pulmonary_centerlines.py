@@ -543,12 +543,14 @@ def cap_surface(surface: vtk.vtkPolyData) -> tuple[vtk.vtkPolyData, np.ndarray]:
 
 def name_cap_regions(
     surface: vtk.vtkPolyData, entity_ids: np.ndarray, profiles
-) -> dict[int, str]:
+) -> tuple[dict[int, str], dict[int, str]]:
     """Give each entity id the patch name it should carry into the mesh.
 
     The wall is the region with by far the most cells. Each remaining region is
     matched to the open profile it sits on, and the one on the largest profile
-    becomes the inlet, as that is the main pulmonary artery.
+    becomes the inlet, as that is the main pulmonary artery. The second mapping
+    gives the same names by profile index, so the profile table can record
+    which patch each rim becomes.
     """
     points = vtk_to_numpy(surface.GetPoints().GetData())
     polygons = vtk_to_numpy(surface.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
@@ -577,7 +579,8 @@ def name_cap_regions(
         (pair for pair in matched if pair[0] != inlet_id), start=1
     ):
         names[identifier] = f"outlet{number}"
-    return names
+    profile_names = {profile: names[identifier] for identifier, profile in matched}
+    return names, profile_names
 
 
 TARGET_AREA = "TargetArea"
@@ -740,20 +743,24 @@ def write_named_stl(
         raise RuntimeError(f"Could not write {filename}")
 
 
-def write_profiles_csv(profiles, filename: Path) -> None:
-    """Record each open profile's size and centre for the meshing stage.
+def write_profiles_csv(
+    profiles, profile_names: dict[int, str], filename: Path
+) -> None:
+    """Record each open profile's size, centre and patch name.
 
     These are the rims of the surface that is actually meshed, so with flow
-    extensions enabled they are the extended rims, not the original ones.
+    extensions enabled they are the extended rims, not the original ones. The
+    name ties each rim to its mesh patch, which the Windkessel split needs.
     """
     filename.parent.mkdir(parents=True, exist_ok=True)
     with filename.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["index", "area", "radius", "x", "y", "z"])
+        writer.writerow(["index", "area", "radius", "x", "y", "z", "name"])
         for index, (area, centroid) in enumerate(profiles):
             radius = math.sqrt(area / math.pi) if area > 0.0 else 0.0
             writer.writerow(
-                [index, area, radius, centroid[0], centroid[1], centroid[2]]
+                [index, area, radius, centroid[0], centroid[1], centroid[2],
+                 profile_names.get(index, "")]
             )
 
 
@@ -1005,12 +1012,11 @@ def main() -> int:
     final_profiles = [
         profile_area_and_centroid(loop) for loop in boundary_loops(uncapped)
     ]
-    profiles_path = output_dir / f"{prefix}_profiles.csv"
-    write_profiles_csv(final_profiles, profiles_path)
-    print(f"Wrote {profiles_path}")
-
     capped, entity_ids = cap_surface(uncapped)
-    names = name_cap_regions(capped, entity_ids, final_profiles)
+    names, profile_names = name_cap_regions(capped, entity_ids, final_profiles)
+    profiles_path = output_dir / f"{prefix}_profiles.csv"
+    write_profiles_csv(final_profiles, profile_names, profiles_path)
+    print(f"Wrote {profiles_path}")
 
     wall_id = next(key for key, name in names.items() if name == "wall")
     cap_cells = int((entity_ids != wall_id).sum())

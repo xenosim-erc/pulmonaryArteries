@@ -185,6 +185,26 @@ A Robin case is named with a `Robin` suffix, so `h08.stl` gives `run/h08` for
 Dirichlet and `run/h08Robin` for Robin and both can be generated from the same
 geometry without colliding.
 
+### Outlet Windkessel parameters
+
+Every outlet is a three-element Windkessel (`windkesselPressure`). The workflow
+asks for totals for the whole distal bed: proximal resistance `Rp` (default
+`3.3e6` Pa s/m^3), distal resistance `Rd` (`2e7` Pa s/m^3) and compliance `C`
+(`3.5e-8` m^3/Pa). Pass `--wk-proximal-resistance`, `--wk-distal-resistance`
+and `--wk-compliance` instead to skip the prompts. Each outlet gets the flow
+fraction `f_i = A_i^(k/2) / sum A_j^(k/2)`, and with it `Rch_i = Rp/f_i`,
+`R_i = Rd/f_i` and `C_i = C f_i`. The outlets in parallel then add up to the
+totals, and each outlet keeps the time constant `Rd C`. `k` is
+`--flow-split-exponent`: `2` (the default) is the area rule and `3` is
+Murray's law.
+
+`pythonScripts/windkessel_outlets.py` writes these values to
+`0/fluid/windkesselOutlets`, using the outlet areas in `<prefix>_profiles.csv`.
+`0/fluid/p` includes that file. Its named entries override the template's
+uniform `"outlet.*"` entry, which is used only if the file is missing. To try
+different totals on an existing case, rerun the script on that case rather
+than editing the values by hand.
+
 ### Mesh units
 
 The geometry is meshed in its STL units (millimetres for the supplied scans),
