@@ -26,7 +26,7 @@ whole anatomy.
 
 So the crotches are rounded on their own. At each point the target radius is
 the wall thickness that will actually be extruded there, divided by
-`--saddle-safety-factor` (default 0.6); the thickness comes from the same
+`--saddle-safety-factor` (default 0.333); the thickness comes from the same
 centerline diameters and Gaussian smoothing that `Gauss.py` uses later, so the
 threshold and the extrusion agree. Only points below their own target are
 moved, and the region is grown by `--saddle-dilation` rings and feathered so

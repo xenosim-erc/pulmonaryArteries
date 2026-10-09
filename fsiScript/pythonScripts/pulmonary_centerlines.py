@@ -888,7 +888,7 @@ def parse_args() -> argparse.Namespace:
         default=0.333,
         help=(
             "a saddle is rounded until its concave radius reaches the local wall "
-            "thickness divided by this factor (default: 0.6)"
+            "thickness divided by this factor (default: 0.333)"
         ),
     )
     parser.add_argument(

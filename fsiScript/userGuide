@@ -1,0 +1,38 @@
+This is a human-written non-exhaustive summary of the script (see the README for more detail):
+
+The script sets up an FSI case of vascular geometries with walls extruded a percentage of the vessel diameter.
+
+Meshing and housekeeping:
+- The current workflow expects large arteries with units in mm. This workflow will fail with other units due to the cfMesh settings.
+      - If mesh is in metres this can be rectified by dropping the meshDict settings by a factor of 1000 in all cases
+- Sample geometries are contained in geometries directory.
+- The only directory which needs touched directly is the run directory where final composed cases are written.
+- The template directories contain things which are required to compose the cases and copied into the cases. They are poorly named.
+- Three element windkessels are applied at each outlet with a total resistance and compliance which is distributed according to an area rule.
+- There is quite aggressive mesh refinement at small outlets as they end up poorly shaped and glued otherwise. This massively increases cell counts in geometries with lots of small outlets.
+
+Fluid sub-problem:
+- Laminar flow assumed. Non-newtonian blood assumed. Easily editable.
+- Defaults are typical healthy human WK3 parameters.
+- Typical human and pig flow waveforms are available.
+
+Solid sub-problem:
+- The inlets and outlets of cases are considered fully pinned. Changing this leads to mesh degradation.
+- The artery wall is considered to be neoHookean. Material parameters are easy to change and will depend on extruded thickness.
+
+Coupling:
+- Robin coupling is generally quicker and more robust.
+- Dirichlet allows higher timesteps with more fsi iterations per timestep so may be better for some problems.
+- Dirichlet requires IQN-ILS for stability and it sometimes does weird things with storing modes which slows it down hugely. Further optimisation would probably be fruitful.
+
+Optional settings worth exploring:
+- saddle-smoothing-factor: Default is 0.33 and a lower number increases the targeted radius of curvature in saddles. A higher number increases faithfulness to the original geometry. Lower gives more surety of no solid mesh self-intersection.
+- no-saddle-smoothing: If your geometry does not have concavities or you want thin walls this step is not necessary. 
+- cells-per-radius: Default is 3 and higher will more finely resolve the small outlets but result in more cells. Works in conjunction with max-refinement-levels as some numbers will be unattainable if they ask for more than N levels of refinement.
+- maximum-refinement-levels: Default is 1 and determines how much much finer than the background mesh the cells may be requested. Higher than one tends to cause issues with very aggressive cell grading but left behind as some geometries may require it.
+- sphere-radius-factor: Default is 4. This determines how large the refinement spheres around small outlets are. Lowering it can decrease fluid mesh cell counts but can also decrease fluid mesh quality. 
+- flow-split-exponent: Default is 2 which corresponds to capacitance directly proportional to outlet area and resistance inversely proportional to outlet area (Yang et al., 2019). 3 corresponds to Murrays Law which appears to break down at the first birfurcations in the pulmonary trunk.
+
+There are several other optional settings, however these are the ones that have most potential to be useful (in the humble opinion of the author)
+
+[1] W. Yang, M. Dong, M. Rabinovitch, F. P. Chan, A. L. Marsden, and J. A. Feinstein, “Evolution of hemodynamic forces in the pulmonary tree with progressively worsening pulmonary arterial hypertension in pediatric patients,” Biomech Model Mechanobiol, vol. 18, no. 3, pp. 779–796, Jun. 2019, doi: 10.1007/s10237-018-01114-0.
