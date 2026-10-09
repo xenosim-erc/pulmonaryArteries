@@ -338,7 +338,7 @@ def _collapsing_triangles(
     pass: a per-pass limit still permits unbounded collapse once it is applied a
     few hundred times.
     """
-    return _triangle_areas(triangles, candidate) < 0.25 * np.maximum(
+    return _triangle_areas(triangles, candidate) < 0.1 * np.maximum(
         initial_areas, 1e-30
     )
 
@@ -885,7 +885,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--saddle-safety-factor",
         type=float,
-        default=0.6,
+        default=0.333,
         help=(
             "a saddle is rounded until its concave radius reaches the local wall "
             "thickness divided by this factor (default: 0.6)"
