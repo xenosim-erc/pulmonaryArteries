@@ -11,7 +11,7 @@ PRE-FLIGHT
 ----------
  1. Locate the fsi-env Python          Fail early if VTK/VMTK are unreachable.
  2. Check the helper scripts exist     centerlines, CSV, Gauss, empty patch, refinements.
- 3. Check the templates exist          templateMesh and templateCase directories.
+ 3. Check the templates exist          template/templateMesh and template/templateCase.
  4. Check the meshing utilities        surfaceFeatureEdges, cartesianMesh, checkMesh,
                                        createPatch, mapExtrudeDistance, varExtrudeMesh.
  5. Read the command line              Prompt for every setting not supplied (wall model,

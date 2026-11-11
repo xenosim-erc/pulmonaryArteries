@@ -83,7 +83,7 @@ by about a factor of five while the mean thickness changes by under 0.001%.
 
 ### Mesh refinement
 
-`maxCellSize` in `templateMesh/fluidMeshing/system/meshDict` sets the global
+`maxCellSize` in `template/templateMesh/fluidMeshing/system/meshDict` sets the global
 cell size, and `add_refinements.py` adds the local refinement each geometry
 needs. Nothing is placed by hand, so the dictionary carries no coordinates tied
 to one anatomy; any `objectRefinements` block already present is replaced.
@@ -264,9 +264,9 @@ the STL units.
 
 - `geometries/`: input STL surfaces
 - `pythonScripts/`: VTK/VMTK geometry-processing utilities
-- `templateMesh/`: reusable cfMesh and wall-extrusion case files
-- `templateCase/`: reusable solids4foam case files, Dirichlet-Neumann coupling
-- `templateCaseRobin/`: the same, for Robin-Neumann coupling
+- `template/templateMesh/`: reusable cfMesh and wall-extrusion case files
+- `template/templateCase/`: reusable solids4foam case files, Dirichlet-Neumann coupling
+- `template/templateCaseRobin/`: the same, for Robin-Neumann coupling
 - `meshing.sh`: the end-to-end meshing driver
 - `MESHING_STEPS.txt`: every step of the workflow, one line each
 - `environment.yml`: the Python dependency specification
@@ -334,4 +334,4 @@ case is written beneath `run/`.
 
 Before running a generated case, review the material properties, boundary
 conditions, decomposition settings, processor count, and cluster-specific
-paths in `templateCase/`.
+paths in `template/templateCase/`.

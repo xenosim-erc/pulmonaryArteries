@@ -16,9 +16,9 @@ GAUSS_SCRIPT="$SCRIPT_DIR/pythonScripts/Gauss.py"
 EMPTY_PATCH_SCRIPT="$SCRIPT_DIR/pythonScripts/add_empty_boundary_patch.py"
 REFINEMENT_SCRIPT="$SCRIPT_DIR/pythonScripts/add_refinements.py"
 WINDKESSEL_SCRIPT="$SCRIPT_DIR/pythonScripts/windkessel_outlets.py"
-TEMPLATE_MESH_DIR="$SCRIPT_DIR/templateMesh"
-TEMPLATE_CASE_DIR="$SCRIPT_DIR/templateCase"
-TEMPLATE_CASE_ROBIN_DIR="$SCRIPT_DIR/templateCaseRobin"
+TEMPLATE_MESH_DIR="$SCRIPT_DIR/template/templateMesh"
+TEMPLATE_CASE_DIR="$SCRIPT_DIR/template/templateCase"
+TEMPLATE_CASE_ROBIN_DIR="$SCRIPT_DIR/template/templateCaseRobin"
 RUN_DIR="$SCRIPT_DIR/run"
 
 # Allow an alternate cfMesh installation to be selected on systems where the
