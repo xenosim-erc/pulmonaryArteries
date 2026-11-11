@@ -65,6 +65,7 @@ Description
 #include "processorPolyPatch.H"
 #include "processorMeshes.H"
 #include "hexRef8Data.H"
+#include "unitConversion.H"
 
 using namespace Foam;
 
@@ -473,6 +474,102 @@ int main(int argc, char *argv[])
         (
             PatchTools::pointNormals(mesh, extrudePatch, faceFlips)
         );
+
+        // Optionally smooth the extrusion directions over the patch.  Each
+        // point is moved along its own normal, so wherever the patch is
+        // concave on the extrusion side with a radius below the local
+        // distance, neighbouring normals cross and the extruded cells fold
+        // inside out.  On a faceted boundary mesh the point normals are far
+        // noisier than the underlying geometry, especially at creases and
+        // refinement transitions.  Each pass replaces every normal by the
+        // normalised sum of itself and its edge neighbours, which spreads
+        // the change of direction over more points and removes the local
+        // crossings, while leaving the layer-0 points (the conformal
+        // interface) untouched.  Serial only: in parallel the processor
+        // boundaries would not be synchronised.
+        const label nNormalSmoothing
+        (
+            dict.getOrDefault<label>("nNormalSmoothingIterations", 0)
+        );
+        if (nNormalSmoothing > 0)
+        {
+            if (Pstream::parRun())
+            {
+                FatalErrorInFunction
+                    << "nNormalSmoothingIterations is only supported in serial"
+                    << exit(FatalError);
+            }
+
+            const pointField originalNormals(extrudePatchPointNormals);
+            const edgeList& patchEdges = extrudePatch.edges();
+
+            for (label iter = 0; iter < nNormalSmoothing; ++iter)
+            {
+                pointField summed(extrudePatchPointNormals);
+                forAll(patchEdges, edgei)
+                {
+                    const edge& e = patchEdges[edgei];
+                    summed[e.first()] += extrudePatchPointNormals[e.second()];
+                    summed[e.second()] += extrudePatchPointNormals[e.first()];
+                }
+                extrudePatchPointNormals = summed/(mag(summed) + VSMALL);
+            }
+
+            // Limit how far smoothing may turn a normal away from the patch
+            // normal.  Where the patch itself folds back (a crease of nearly
+            // 180 degrees in the source surface), averaging can turn a normal
+            // right round, so that point would be extruded back into the
+            // source domain; and a strongly tilted extrusion shears its cells
+            // and thins the wall by the cosine of the tilt.  Normals beyond
+            // the limit are rotated back onto it, towards the patch normal.
+            const scalar maxTilt
+            (
+                dict.getOrDefault<scalar>("maxNormalTilt", 45)
+            );
+            const scalar cosMax = Foam::cos(degToRad(maxTilt));
+            const scalar sinMax = Foam::sin(degToRad(maxTilt));
+            label nLimited = 0;
+            forAll(extrudePatchPointNormals, pointi)
+            {
+                vector& n = extrudePatchPointNormals[pointi];
+                const vector& n0 = originalNormals[pointi];
+                const scalar c = n & n0;
+                if (c < cosMax)
+                {
+                    const vector perp(n - c*n0);
+                    const scalar magPerp = mag(perp);
+                    n = (magPerp > VSMALL) ? cosMax*n0 + sinMax*perp/magPerp : n0;
+                    ++nLimited;
+                }
+            }
+            Info<< "Limited " << nLimited << " smoothed normals to "
+                << maxTilt << " deg from the patch normal" << endl;
+
+            const scalarField tilt
+            (
+                radToDeg
+                (
+                    acos
+                    (
+                        min
+                        (
+                            scalar(1),
+                            max
+                            (
+                                scalar(-1),
+                                extrudePatchPointNormals & originalNormals
+                            )
+                        )
+                    )
+                )
+            );
+            Info<< "Smoothed the extrusion normals with " << nNormalSmoothing
+                << " passes" << nl
+                << "    average tilt from the patch normal: "
+                << gAverage(tilt) << " deg" << nl
+                << "    maximum tilt from the patch normal: "
+                << gMax(tilt) << " deg" << nl << endl;
+        }
 
         // Read the requested total extrusion distance at every point of the
         // source volume mesh.  The field name is selected in

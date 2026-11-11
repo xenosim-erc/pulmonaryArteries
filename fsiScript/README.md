@@ -29,8 +29,15 @@ the wall thickness that will actually be extruded there, divided by
 `--saddle-safety-factor` (default 0.333); the thickness comes from the same
 centerline diameters and Gaussian smoothing that `Gauss.py` uses later, so the
 threshold and the extrusion agree. Only points below their own target are
-moved, and the region is grown by `--saddle-dilation` rings and feathered so
-the correction blends into untouched surface. Rim points are held fixed.
+moved, and the region is grown by `--saddle-dilation` rings (default 3) and
+feathered so the correction blends into untouched surface, over
+`--saddle-iterations` passes (default 20). Rim points are held fixed. The
+smoothing has settled by 20 passes: points at the edge of the region stay put,
+so the region's size, not the pass count, limits how round a concavity can
+become. `--saddle-dilation 8 --saddle-iterations 50` rounds more and fixed a
+few more solids in testing, but moves about three times as much of the
+surface (a median of 11% against 4%), so it is kept for cases that still
+fail.
 Because this moves the surface, the centerlines are re-extracted afterwards.
 
 On the supplied geometries at 8% extrusion this moves 2-3% of the surface and
@@ -46,8 +53,12 @@ normal (`varExtrudeMesh`). That single operation is the source of nearly every
 defect seen in the solid mesh, and it fails in three distinct ways:
 
 - **Concave folding.** Where the wall thickness exceeds the local concave radius
-  of curvature the offset self-intersects. This happens almost only in the
-  bifurcation crotches, and is what the saddle rounding below addresses.
+  of curvature the offset self-intersects, and cells turn inside out (negative
+  volumes). Across 94 test geometries only 10% of these cells were in the
+  bifurcation crotches; most sat on small dents and creases along the branches
+  (segmentation artefacts) or within 2 mm of an open end. Saddle rounding
+  (below) reaches some of them; smoothing the extrusion normals reaches the
+  rest.
 - **Convex creases.** A sharp ridge is offset along one averaged normal, which
   stretches rather than folds the outer surface. It produces warped and
   incorrectly oriented faces with positive cell volumes, so `checkMesh` reports
@@ -65,6 +76,27 @@ A useful check on any suspect surface is the distribution of dihedral angles.
 Values above 120 degrees almost always mean inconsistent triangle winding rather
 than real geometry, since two neighbours wound in opposite directions read as an
 almost 180 degree fold; genuine creases sit between roughly 45 and 90 degrees.
+
+### Smoothing the extrusion normals
+
+What folds is the cfMesh fluid wall, not the STL: `varExtrudeMesh` extrudes
+the wall patch cfMesh produced, along point normals averaged from that patch's
+faces. Those normals are noisier than the surface underneath, particularly at
+creases and refinement transitions, so the wall's concave radius there is
+smaller than the STL's (a median of 0.39 mm against 0.61 mm at the fold
+sites) and saddle smoothing of the STL cannot reach it.
+
+The template therefore sets `nNormalSmoothingIterations 20` in
+`varExtrudeMeshDict`. Each pass replaces every point's normal with the
+normalised sum of itself and its edge neighbours, which spreads a sharp change
+of direction over more points so neighbouring normals no longer cross. The
+fluid wall itself (layer 0, the interface) is not moved. `maxNormalTilt 45`
+stops any normal turning more than 45 degrees from the wall normal: where a
+scan folds back on itself, averaging could otherwise turn a normal right round
+and extrude the wall into the fluid. On the 94 test geometries this took the
+clean solids from 31 to 62 and the negative-volume cells from 420 to 69, with
+an average tilt of about 3 degrees. The remaining failures are mostly scans
+with folded-back patches, which need repairing.
 
 ### Solid mesh check
 

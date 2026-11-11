@@ -23,6 +23,15 @@ distanceField       WallThickness;
 // Fluid boundary normals normally point outward into the arterial wall.
 flipNormals         false;
 
+// Optional: smooth the extrusion normals over the patch before extruding.
+// Each pass replaces a normal by the normalised sum of itself and its edge
+// neighbours. 0 (the default) uses the raw patch point normals. Serial only.
+nNormalSmoothingIterations 0;
+
+// With smoothing on, no normal may end up more than this many degrees from
+// its original patch normal (default 45).
+maxNormalTilt       45;
+
 // The private utility uses this model for nLayers and sumThickness(), but
 // replaces its constant geometric thickness with distanceField at each point.
 extrudeModel        linearNormal;

@@ -978,7 +978,22 @@ def parse_args() -> argparse.Namespace:
         "--saddle-dilation",
         type=int,
         default=3,
-        help="rings by which the saddle region is grown before feathering",
+        help=(
+            "rings by which the saddle region is grown before feathering "
+            "(default: 3). Points at the edge of the region stay put, so the "
+            "region's size, not the number of passes, limits how round a "
+            "concavity can become; 8 rounds more but moves about three times "
+            "as much of the surface"
+        ),
+    )
+    parser.add_argument(
+        "--saddle-iterations",
+        type=int,
+        default=20,
+        help=(
+            "saddle-smoothing passes (default: 20). The smoothing has settled "
+            "by then at the default dilation; raise it with --saddle-dilation"
+        ),
     )
     parser.add_argument(
         "--extension-diameters",
@@ -1063,7 +1078,10 @@ def main() -> int:
             f"(target radius {target.min():.3g} to {target.max():.3g})"
         )
 
-        uncapped, touched = smooth_saddles(uncapped, target, args.saddle_dilation)
+        uncapped, touched = smooth_saddles(
+            uncapped, target, args.saddle_dilation,
+            outer_iterations=args.saddle_iterations,
+        )
         print(
             f"Rounded concave saddles to {description}: "
             f"{100.0 * touched:.2f}% of the surface was moved"

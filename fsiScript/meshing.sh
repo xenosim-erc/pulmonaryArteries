@@ -142,7 +142,8 @@ if [[ $# -eq 0 ]]; then
     echo "       [--smoothing-iterations N] [--smoothing-passband VALUE]" >&2
     echo "       [--extension-diameters VALUE] [--no-saddle-smoothing]" >&2
     echo "       [--saddle-safety-factor VALUE]" >&2
-    echo "       [--saddle-dilation N] [--cells-per-radius VALUE]" >&2
+    echo "       [--saddle-dilation N] [--saddle-iterations N]" >&2
+    echo "       [--cells-per-radius VALUE]" >&2
     echo "       [--sphere-radius-factor VALUE]" >&2
     echo "       [--thickness-smoothing-passes N]" >&2
     echo "       [--max-mapping-distance VALUE] [--maximum-refinement-levels N]" >&2
@@ -1145,10 +1146,12 @@ Things to try, in roughly this order:
      that fails at 0.8 is often clean at 1 (or the reverse).
   2. A smaller --extrusion-percentage, which thins the wall and makes the
      offset less likely to fold.
-  3. More --thickness-smoothing-passes, which removes steps in the wall
-     thickness that twist neighbouring cells.
---saddle-safety-factor only helps when the bad cells sit in the
-bifurcation crotches; elsewhere it has little effect.
+  3. Wider saddle smoothing: --saddle-dilation 8 --saddle-iterations 50.
+     It rounds dents and creases more but moves more of the surface.
+  4. More nNormalSmoothingIterations in template/templateMesh/
+     varExtrudeFunc/system/varExtrudeMeshDict.
+If the bad cells sit on a fold where the scan doubles back on itself,
+only repairing the STL will fix them.
 ########################################################################
 EOF
 }

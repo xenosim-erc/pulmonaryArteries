@@ -35,6 +35,26 @@ All selected patch-point distances must be strictly positive and the field
 must have dimensions of length. The utility stops with a fatal error if
 either condition is violated.
 
+## Smoothing the extrusion normals
+
+Each point is extruded along its own patch normal, so wherever the patch is
+concave on the extrusion side with a radius smaller than the local distance,
+neighbouring normals cross and the extruded cells fold inside out. On a faceted
+boundary mesh the point normals are noisier than the geometry they describe.
+
+Two optional dictionary entries smooth them before extruding:
+
+```foam
+nNormalSmoothingIterations 20;   // default 0: raw patch point normals
+maxNormalTilt       45;          // degrees, default 45
+```
+
+Each pass replaces every normal by the normalised sum of itself and its edge
+neighbours. Afterwards no normal may be more than `maxNormalTilt` degrees from
+its original patch normal; any that are get rotated back onto that limit. Layer
+0 (the source patch) is never moved, so the interface stays conformal. The
+utility prints the average and maximum tilt. Smoothing is serial only.
+
 ## Building
 
 Load an OpenFOAM environment that provides the OpenCFD/OpenFOAM libraries used
