@@ -66,6 +66,20 @@ Values above 120 degrees almost always mean inconsistent triangle winding rather
 than real geometry, since two neighbours wound in opposite directions read as an
 almost 180 degree fold; genuine creases sit between roughly 45 and 90 degrees.
 
+### Solid mesh check
+
+Because none of these failures stops `varExtrudeMesh`, the workflow runs
+`checkMesh` on the finished solid itself. It uses the standard checks, not
+`-allGeometry`: every solid fails the stricter face-tet test, so only the
+standard set separates usable meshes from broken ones. A failure (typically
+negative-volume cells and incorrectly oriented faces) does not stop the run,
+so the case can still be inspected, but it is hard to miss. A long warning is
+printed straight away and again at the end, the same text is written to
+`run/<name>/SOLID_MESH_WARNING`, and `meshing.params` records the result. The
+warning lists the failed checks, shows how to view the bad cells in ParaView,
+and suggests what to change. Which cells break moves with `maxCellSize`, so a
+geometry that fails at one size is often clean at another.
+
 ### Wall thickness
 
 `Gauss.py` maps a wall thickness onto the surface as a percentage of the local
@@ -85,8 +99,11 @@ by about a factor of five while the mean thickness changes by under 0.001%.
 
 `maxCellSize` in `template/templateMesh/fluidMeshing/system/meshDict` sets the global
 cell size, and `add_refinements.py` adds the local refinement each geometry
-needs. Nothing is placed by hand, so the dictionary carries no coordinates tied
-to one anatomy; any `objectRefinements` block already present is replaced.
+needs. The default is 0.8 mm. Across 20 test geometries it meshed more of them,
+and gave more clean solids, than any coarser size; a geometry without small
+branches will usually mesh coarser, but check each one before relying on it.
+Nothing is placed by hand, so the dictionary carries no coordinates tied to one
+anatomy; any `objectRefinements` block already present is replaced.
 
 - **Outlets.** A cap only a few cells across is meshed shut: the opening never
   appears in the volume mesh, so the case silently loses a boundary condition

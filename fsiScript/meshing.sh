@@ -1045,6 +1045,120 @@ echo "Removed the temporary zero-face outerWall patch from the fluid mesh."
 echo "Renamed solid outerWall to innerWall and solid wall to outerWall."
 echo "Set the solid inlet and outlet patches to type patch."
 
+# Check the finished solid. The wall offset can fold or invert cells (see
+# "Why the solid mesh is fragile" in the README), and nothing upstream would
+# notice: varExtrudeMesh succeeds and the case assembles normally, then the
+# solver diverges or produces nonsense. checkMesh's standard checks are used,
+# not -allGeometry: every solid fails the stricter face-tet test, so only the
+# standard set separates usable meshes from broken ones. A failure is a
+# warning rather than an error so the case can still be inspected, but it is
+# reported now, repeated at the end, recorded in meshing.params and written to
+# a SOLID_MESH_WARNING file in the run case so a batch run cannot miss it.
+solid_check_log="$solid_case/log.checkMesh"
+echo "Checking the solid mesh..."
+solid_mesh_ok=1
+solid_defects=()
+solid_negative_cells=0
+solid_wrong_faces=0
+solid_check_crashed=0
+if ! ( cd "$solid_case" && "$CHECK_MESH" > log.checkMesh 2>&1 ); then
+    solid_mesh_ok=0
+    solid_check_crashed=1
+    solid_defects=("checkMesh itself failed to run on the solid mesh")
+elif grep -q '^Mesh OK' "$solid_check_log"; then
+    echo "  Solid mesh OK. checkMesh report: $solid_check_log"
+else
+    solid_mesh_ok=0
+    mapfile -t solid_defects < <(
+        sed -n 's/^[[:space:]]*\*\*\*[[:space:]]*//p' "$solid_check_log"
+    )
+    (( ${#solid_defects[@]} > 0 )) ||
+        solid_defects=("checkMesh did not report Mesh OK; see the full report")
+    # First number after each phrase; awk stops at the first match itself,
+    # so no pipe to head can trip pipefail.
+    first_count() {
+        awk -v phrase="$1" '
+            index($0, phrase) {
+                rest = substr($0, index($0, phrase) + length(phrase))
+                if (match(rest, /[0-9]+/)) {
+                    print substr(rest, RSTART, RLENGTH)
+                    exit
+                }
+            }
+        ' "$solid_check_log"
+    }
+    solid_negative_cells="$(first_count 'Number of negative volume cells:')"
+    solid_negative_cells="${solid_negative_cells:-0}"
+    solid_wrong_faces="$(first_count 'Error in face pyramids:')"
+    solid_wrong_faces="${solid_wrong_faces:-0}"
+fi
+
+# The full warning text, printed twice and saved in the run case.
+solid_warning() {
+    cat <<EOF
+########################################################################
+WARNING: THE SOLID MESH FAILED checkMesh
+########################################################################
+EOF
+    if (( solid_check_crashed )); then
+        cat <<EOF
+The run case was assembled, but checkMesh could not even read the solid
+wall mesh, so it is almost certainly unusable. See the report below.
+EOF
+    elif (( solid_negative_cells > 0 || solid_wrong_faces > 0 )); then
+        cat <<EOF
+The run case was assembled, but the solid wall mesh has inverted or
+folded cells. An FSI run on it is likely to diverge or give wrong wall
+displacements. Do not use it as it is.
+EOF
+    else
+        cat <<EOF
+The run case was assembled. The solid has no inverted cells, but it
+failed one or more quality checks (typically a few highly skewed or
+non-orthogonal faces). It may run, but check where the faces are before
+relying on the results.
+EOF
+    fi
+    cat <<EOF
+
+  Negative-volume cells:        $solid_negative_cells
+  Incorrectly oriented faces:   $solid_wrong_faces
+
+Failed checks:
+EOF
+    printf '  - %s\n' "${solid_defects[@]}"
+    cat <<EOF
+
+Full report: $solid_check_log
+
+To see where the bad cells are (usually bifurcation crotches or sharp
+convex ridges), from $solid_case run:
+  foamToVTK -cellSet zeroVolumeCells
+  foamToVTK -faceSet wrongOrientedFaces
+  foamToVTK -faceSet skewFaces
+and open the VTK output alongside the mesh in ParaView. Only the sets
+for checks that actually failed will exist.
+
+Things to try, in roughly this order:
+  1. A different maxCellSize in template/templateMesh/fluidMeshing/system/
+     meshDict. Which cells break moves with the cell size, so a geometry
+     that fails at 0.8 is often clean at 1 (or the reverse).
+  2. A smaller --extrusion-percentage, which thins the wall and makes the
+     offset less likely to fold.
+  3. More --thickness-smoothing-passes, which removes steps in the wall
+     thickness that twist neighbouring cells.
+--saddle-safety-factor only helps when the bad cells sit in the
+bifurcation crotches; elsewhere it has little effect.
+########################################################################
+EOF
+}
+
+if (( ! solid_mesh_ok )); then
+    echo >&2
+    solid_warning >&2
+    echo >&2
+fi
+
 # Assemble the coupled FSI run case from the reusable template. The name was
 # checked at startup; check again in case another run has since created it.
 fluid_poly_mesh="$fluid_case/constant/polyMesh"
@@ -1162,8 +1276,19 @@ params_file="$run_case/meshing.params"
     echo
     print_settings
     printf '%-28s %s\n' "Fluid cells:" "${fluid_cells:-unknown}"
+    if (( solid_mesh_ok )); then
+        printf '%-28s %s\n' "Solid mesh check:" "OK"
+    else
+        printf '%-28s %s\n' "Solid mesh check:" \
+            "FAILED ($solid_negative_cells negative-volume cells, $solid_wrong_faces incorrectly oriented faces; see SOLID_MESH_WARNING)"
+    fi
 } > "$params_file"
 echo "Recorded the settings in: $params_file"
+
+solid_warning_file="$run_case/SOLID_MESH_WARNING"
+if (( ! solid_mesh_ok )); then
+    solid_warning > "$solid_warning_file"
+fi
 
 
 # Offer to remove only the intermediate caseFiles directory created for this
@@ -1191,10 +1316,16 @@ echo
 echo "Run case ready: $run_case"
 echo "Settings recorded in: $params_file"
 echo
-echo "Next steps:"
-echo "  cd $run_case"
-echo "  checkMesh -region solid    # look for self-intersection at the bifurcations"
-echo "  sbatch run.slurm"
-echo
-echo "If the solid self-intersects, rerun with a smaller --extrusion-percentage"
-echo "or more smoothing."
+if (( solid_mesh_ok )); then
+    echo "Solid mesh passed checkMesh."
+    echo
+    echo "Next steps:"
+    echo "  cd $run_case"
+    echo "  sbatch run.slurm"
+else
+    # Repeated here because the first warning has scrolled away by now.
+    solid_warning >&2
+    echo >&2
+    echo "This warning is saved in: $solid_warning_file" >&2
+    echo "Fix the solid mesh before submitting run.slurm." >&2
+fi

@@ -93,40 +93,44 @@ SOLID MESH
                                         by the template), in two passes so the type is applied
                                         reliably.
 36. Verify the end patches              Confirm the expected count and type were written.
+37. Check the solid mesh               checkMesh (standard checks) on varExtrudeFunc. On a
+                                        failure (negative volumes, inverted faces, ...) a
+                                        warning is printed now and again at the end, written
+                                        to run/<name>/SOLID_MESH_WARNING and recorded in
+                                        meshing.params. The case is still assembled.
 
 
 CASE ASSEMBLY
 -------------
-37. Copy the case template              templateCaseRobin (default) or templateCase into
+38. Copy the case template              templateCaseRobin (default) or templateCase into
                                         run/<name>; the name is checked again here.
-38. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
-39. Point the inlet at its waveform    0/fluid/U reads humanFlow or pigFlow from
+39. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
+40. Point the inlet at its waveform    0/fluid/U reads humanFlow or pigFlow from
                                         constant/fluid/inletFlow, per --species (asked for;
                                         default human). endTime is set to --heartbeats
                                         (asked for; default 3) times the cycle length, the
                                         last time in that file.
-40. Set the core count                 numberOfSubdomains in every decomposeParDict and
+41. Set the core count                 numberOfSubdomains in every decomposeParDict and
                                         --ntasks in run.slurm, per --cores (asked for;
                                         default 16); prints fluid cells per processor.
                                         The Slurm job is named after the run case.
-41. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
+42. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
                                         outlets by area^(k/2), k = --flow-split-exponent
                                         (default 2), into 0/fluid/windkesselOutlets. The
                                         outlets are recombined in parallel and checked
                                         against the totals; see log.windkesselOutlets.
-42. Scale the run-case meshes           transformPoints -scale on both regions, by
+43. Scale the run-case meshes           transformPoints -scale on both regions, by
                                         --scale-factor (asked for; default 0.001, mm to m).
                                         The intermediate meshes keep the STL units. No
                                         log is kept; the output is shown only on failure.
-43. Record the settings                 run/<name>/meshing.params: the command line, the
+44. Record the settings                 run/<name>/meshing.params: the command line, the
                                         repository commit and every resolved setting.
-44. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
-45. Print the next steps                cd into the case, check the solid mesh, sbatch.
+45. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+46. Print the next steps                cd into the case and sbatch, or repeat the solid-mesh
+                                        warning if the check failed.
 
 
 AFTERWARDS - NOT DONE BY THE SCRIPT
 -----------------------------------
- *  Check the solid mesh                 checkMesh on constant/solid; look for negative volume
-                                        cells at the bifurcations.
  *  Review the case settings             Material properties, Windkessel values per outlet,
                                         inlet waveform, decomposition and cluster paths.

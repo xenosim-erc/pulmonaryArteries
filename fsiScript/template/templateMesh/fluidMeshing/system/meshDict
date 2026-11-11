@@ -24,21 +24,4 @@ maxCellSize 0.8;
 //boundaryCellSizeRefinementThickness 0.4;
 //minCellSize 0.8;
 
-
-    boundaryLayers
-    {
-   
-          nLayers 1;
-
-         thicknessRatio 1.25;
-
-          maxFirstLayerThickness 0.6;    
-   	minFirstLayerThickness 0.5;
-   }
-
-
-
-               
-     
-
 // ************************************************************************* //
