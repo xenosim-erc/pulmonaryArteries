@@ -24,7 +24,8 @@ PRE-FLIGHT
 
 GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
 --------------------------------------------------------
- 6. Read and clean the STL             Merge duplicate points, triangulate, orient normals.
+ 6. Read and clean the STL             Merge duplicate points, triangulate, drop triangles
+                                       the STL lists twice, orient normals.
  7. Smooth the surface                 Windowed-sinc (Taubin) filter; rims held fixed so the
                                        open profiles do not move.
  8. Fill sub-resolution holes          Close any opening below --minimum-profile-radius; a
@@ -51,6 +52,11 @@ GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
                                        congruent slivers fanned to one centre point;
                                        they are rebuilt as isotropic triangles sized
                                        from the wall they meet. The wall is excluded.
+                                       If the remesher's checks fail on a sound fan-capped
+                                       surface, the fan caps are kept with a WARNING (noted
+                                       in meshing.params); if the surface was already
+                                       non-manifold, the run stops and says whether the
+                                       fault is on the wall or the caps.
 19. Write the surfaces                 <prefix>_uncapped.vtp for thickness mapping, and
                                        <prefix>_capped.stl as one named solid per region.
 

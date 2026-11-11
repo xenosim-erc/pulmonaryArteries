@@ -77,20 +77,67 @@ def fill_small_holes(
     return output, before - len(boundary_loops(output))
 
 
+def remove_duplicate_triangles(
+    surface: vtk.vtkPolyData,
+) -> tuple[vtk.vtkPolyData, int]:
+    """Keep one copy of every triangle that the STL lists more than once.
+
+    Some segmentation exports write the same facet twice, in either winding.
+    Each copy adds a third or fourth triangle to the edges it shares with its
+    neighbours, so the surface is no longer manifold; capping then fails much
+    later, after the centerlines have been extracted. The points must already
+    be merged, since duplicates are recognised by their point ids.
+    """
+    polys = vtk_to_numpy(surface.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+    _, first = np.unique(np.sort(polys, axis=1), axis=0, return_index=True)
+    removed = len(polys) - len(first)
+    if removed == 0:
+        return surface, 0
+
+    keep = np.sort(first)
+    cells = np.column_stack([np.full(len(keep), 3), polys[keep]]).ravel()
+    id_array = numpy_to_vtk(cells.astype(np.int64), deep=True,
+                            array_type=vtk.VTK_ID_TYPE)
+    cell_array = vtk.vtkCellArray()
+    cell_array.SetCells(len(keep), id_array)
+
+    output = vtk.vtkPolyData()
+    output.SetPoints(surface.GetPoints())
+    output.SetPolys(cell_array)
+
+    # Drop any point no longer used by a triangle.
+    clean = vtk.vtkCleanPolyData()
+    clean.SetInputData(output)
+    clean.PointMergingOff()
+    clean.Update()
+    result = vtk.vtkPolyData()
+    result.DeepCopy(clean.GetOutput())
+    return result, removed
+
+
 def prepare_surface(
     surface: vtk.vtkPolyData,
     smoothing_iterations: int = 20,
     pass_band: float = 0.05,
-) -> vtk.vtkPolyData:
+) -> tuple[vtk.vtkPolyData, int]:
+    """Merge, de-duplicate, smooth and orient the input surface.
+
+    Returns the prepared surface and the number of duplicate triangles removed.
+    """
     clean = vtk.vtkCleanPolyData()
     clean.SetInputData(surface)
     clean.PointMergingOn()
     clean.Update()
 
-    triangles = vtk.vtkTriangleFilter()
-    triangles.SetInputConnection(clean.GetOutputPort())
-    triangles.PassLinesOff()
-    triangles.PassVertsOff()
+    merged = vtk.vtkTriangleFilter()
+    merged.SetInputConnection(clean.GetOutputPort())
+    merged.PassLinesOff()
+    merged.PassVertsOff()
+    merged.Update()
+
+    deduplicated, duplicates = remove_duplicate_triangles(merged.GetOutput())
+    triangles = vtk.vtkTrivialProducer()
+    triangles.SetOutput(deduplicated)
     triangles.Update()
 
     # Segmentation-derived surfaces carry staircase artefacts whose curvature is
@@ -125,7 +172,7 @@ def prepare_surface(
 
     output = vtk.vtkPolyData()
     output.DeepCopy(normals.GetOutput())
-    return output
+    return output, duplicates
 
 
 def boundary_loops(surface: vtk.vtkPolyData) -> list[list[Point]]:
@@ -586,6 +633,30 @@ def name_cap_regions(
 TARGET_AREA = "TargetArea"
 
 
+def non_manifold_edge_regions(
+    surface: vtk.vtkPolyData, entity_ids: np.ndarray, wall_id: int
+) -> tuple[int, int]:
+    """Count open or non-manifold edges, split by whether they touch a cap.
+
+    An edge counts against the caps if any triangle using it belongs to one;
+    otherwise it is a wall edge. A closed, manifold surface returns (0, 0).
+    """
+    polys = vtk_to_numpy(surface.GetPolys().GetData()).reshape(-1, 4)[:, 1:]
+    users = defaultdict(list)
+    for cell, (a, b, c) in enumerate(polys):
+        for edge in ((a, b), (b, c), (c, a)):
+            users[(min(edge), max(edge))].append(cell)
+    wall_bad = cap_bad = 0
+    for cells in users.values():
+        if len(cells) == 2:
+            continue
+        if any(entity_ids[cell] != wall_id for cell in cells):
+            cap_bad += 1
+        else:
+            wall_bad += 1
+    return wall_bad, cap_bad
+
+
 def remesh_caps(
     surface: vtk.vtkPolyData, entity_ids: np.ndarray, wall_id: int
 ) -> tuple[vtk.vtkPolyData, np.ndarray]:
@@ -930,11 +1001,13 @@ def main() -> int:
     output_dir = (args.output_dir or input_path.parent).expanduser().resolve()
     prefix = args.prefix or input_path.stem
 
-    uncapped = prepare_surface(
+    uncapped, duplicates = prepare_surface(
         read_stl(input_path),
         smoothing_iterations=args.smoothing_iterations,
         pass_band=args.smoothing_passband,
     )
+    if duplicates:
+        print(f"Removed {duplicates} duplicate triangle(s) from the input STL")
 
     # Fill after smoothing, not before. BoundarySmoothingOff protects the points
     # of an open rim, but once a pinhole is closed its lid is ordinary interior
@@ -1024,11 +1097,34 @@ def main() -> int:
 
     wall_id = next(key for key, name in names.items() if name == "wall")
     cap_cells = int((entity_ids != wall_id).sum())
-    capped, entity_ids = remesh_caps(capped, entity_ids, wall_id)
-    print(
-        f"Remeshed the caps: {cap_cells} triangles to "
-        f"{int((entity_ids != wall_id).sum())}, the wall untouched"
-    )
+    try:
+        capped, entity_ids = remesh_caps(capped, entity_ids, wall_id)
+    except RuntimeError as exc:
+        # The remesher only improves the cap triangles, so when its checks fail
+        # the fan caps are kept, provided the fan-capped surface is itself
+        # sound. If it is not, the fault came from earlier (the input STL or
+        # the capping) and no choice of cap triangles can fix it.
+        wall_bad, cap_bad = non_manifold_edge_regions(capped, entity_ids, wall_id)
+        if wall_bad or cap_bad:
+            raise RuntimeError(
+                f"{exc}; the surface was already non-manifold before cap "
+                f"remeshing ({wall_bad} edge(s) on the wall, {cap_bad} on the "
+                f"caps), so keeping the fan caps would not help. "
+                + ("Wall edges usually mean the input STL needs repairing, "
+                   "for example two vessels touching along an edge."
+                   if wall_bad else
+                   "Cap edges usually mean two openings touch, or an opening "
+                   "touches itself.")
+            ) from exc
+        print(
+            f"WARNING: cap remeshing failed ({exc}); keeping the "
+            f"{cap_cells} fan-cap triangles instead. The wall is unaffected."
+        )
+    else:
+        print(
+            f"Remeshed the caps: {cap_cells} triangles to "
+            f"{int((entity_ids != wall_id).sum())}, the wall untouched"
+        )
 
     uncapped_path = output_dir / f"{prefix}_uncapped.vtp"
     capped_path = output_dir / f"{prefix}_capped.stl"

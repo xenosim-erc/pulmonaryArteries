@@ -1276,6 +1276,12 @@ params_file="$run_case/meshing.params"
     echo
     print_settings
     printf '%-28s %s\n' "Fluid cells:" "${fluid_cells:-unknown}"
+    if grep -q '^WARNING: cap remeshing failed' "$geometry_log"; then
+        printf '%-28s %s\n' "Cap triangles:" \
+            "fan caps kept; cap remeshing failed (see log.geometry)"
+    else
+        printf '%-28s %s\n' "Cap triangles:" "remeshed"
+    fi
     if (( solid_mesh_ok )); then
         printf '%-28s %s\n' "Solid mesh check:" "OK"
     else

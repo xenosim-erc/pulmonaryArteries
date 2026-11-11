@@ -175,6 +175,22 @@ non-orthogonality and skewness to three figures. This step improves the surface
 handed to cfMesh, not the cell size, which is still set by `maxCellSize` and the
 refinement spheres.
 
+On some surfaces the remesher's own checks fail: it reports the surface open
+or non-manifold, or the wall moved. The fan caps are then kept with a warning,
+recorded as `Cap triangles` in `meshing.params`, since they are what the
+workflow used before remeshing existed and the wall is the same either way.
+That fallback is only taken when the fan-capped surface is itself closed and
+manifold. When it is not, the fault came from earlier and the run stops,
+saying whether the bad edges are on the wall (usually an input STL that needs
+repairing, such as two vessels touching along an edge) or on the caps
+(usually two openings that touch).
+
+Triangles that the STL lists twice are removed when it is read, since each
+copy makes the edges it shares non-manifold. Some exports duplicate a whole
+overlapping patch rather than single facets; removing the copies then leaves
+an opening whose rim is not a simple loop, and that surface still needs
+repairing by hand.
+
 Each cap is sized from the wall triangles on its own rim rather than from one
 global length, because the ends of a single geometry are nothing alike: around
 the p02 inlet the wall averages 1.87 mm and around `outlet11` it averages
