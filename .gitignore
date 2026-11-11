@@ -94,8 +94,11 @@ SunOS*Gcc*/
 /fsiScript/run/*
 !/fsiScript/run/.ignorethisfile
 
-# Archive of the extra test geometries; large, kept locally only
-/fsiScript/geometries/001.zip
+# Extra test geometries and their archives; large, kept locally only. The
+# original h02/h08/p01/p02/p16 surfaces stay tracked.
+/fsiScript/geometries/*.zip
+/fsiScript/geometries/human/human_*.stl
+/fsiScript/geometries/porcine/porcine_*.stl
 
 
 # other stuff

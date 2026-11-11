@@ -294,7 +294,7 @@ the STL units.
 
 ## What is version-controlled
 
-- `geometries/`: input STL surfaces
+- `geometries/`: input STL surfaces, in `human/` and `porcine/`
 - `pythonScripts/`: VTK/VMTK geometry-processing utilities
 - `template/templateMesh/`: reusable cfMesh and wall-extrusion case files
 - `template/templateCase/`: reusable solids4foam case files, Dirichlet-Neumann coupling
@@ -350,14 +350,14 @@ First source the required OpenFOAM/solids4foam environment so their commands
 are on `PATH`. Then, from this directory, run for example:
 
 ```bash
-./meshing.sh geometries/h08.stl
+./meshing.sh geometries/human/h08.stl
 ```
 
 The script uses `.env/fsi-env/bin/python` by default. An environment installed
 elsewhere can be selected explicitly:
 
 ```bash
-FSI_PYTHON=/path/to/fsi-env/bin/python ./meshing.sh geometries/h08.stl
+FSI_PYTHON=/path/to/fsi-env/bin/python ./meshing.sh geometries/human/h08.stl
 ```
 
 Use `./meshing.sh` without arguments to see the command-line options. Generated
