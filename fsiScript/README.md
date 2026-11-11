@@ -2,8 +2,8 @@
 
 This directory prepares an open pulmonary-artery STL for a coupled
 fluid-structure interaction (FSI) simulation. The workflow smooths the input
-surface, extracts vessel centerlines, adds straight flow extensions to every
-open profile, estimates a diameter-dependent wall thickness, creates fluid and
+surface, extracts vessel centerlines, optionally adds straight flow extensions
+to every open profile, estimates a diameter-dependent wall thickness, creates fluid and
 solid meshes, and assembles an OpenFOAM/solids4foam run case.
 
 ### Surface preparation
@@ -108,11 +108,12 @@ anatomy; any `objectRefinements` block already present is replaced.
 - **Outlets.** A cap only a few cells across is meshed shut: the opening never
   appears in the volume mesh, so the case silently loses a boundary condition
   and the faces that should have carried it merge into the wall. Each small
-  profile gets a sphere, centred on its extended rim with a radius of
+  profile gets a sphere, centred on its rim with a radius of
   `--sphere-radius-factor` times the profile radius. That factor defaults to 4
-  rather than 2 because a flow extension is itself one diameter long, so a
-  smaller sphere covers only the extension and none of the feeder vessel behind
-  it.
+  rather than 2 because it was chosen when every profile had a one-diameter
+  flow extension, and a smaller sphere covered only the extension and none of
+  the feeder vessel behind it. It has not been retuned since extensions were
+  turned off by default.
 Sizes are driven by `--cells-per-radius` (default 3), the number of cells wanted
 across a vessel radius, and quantised to one of cfMesh's octree levels: cfMesh
 can only halve, so it satisfies a request by taking the first level at or below
@@ -125,8 +126,20 @@ Refining narrow branches along their length was tried and removed: the
 refinement-level transitions it left on the wall patch did far more harm than
 the faceting it removed.
 
-Every open profile is then extended along its centerline direction by
-`--extension-diameters` local diameters (default 1). VMTK always resamples the
+### Flow extensions (off by default)
+
+`--extension-diameters` (default 0) extends every open profile along its
+centerline direction by that many local diameters. Extensions are off by
+default because the solid ends are pinned, so planar, circular end rings are no
+longer needed, and the blend into the circle was itself a source of distorted
+cells. Across 20 test geometries, turning them off meshed one more geometry at
+0.8 mm and two more at 1 mm, roughly halved the stricter `checkMesh -allGeometry`
+defect counts, and cut fluid cell counts by 10-20% at 0.8 mm. It is not better
+on every geometry, so try `--extension-diameters 1` if a case fails without.
+Without extensions the openings are capped where they are, on their original
+rims, which are generally neither circular nor planar.
+
+When extensions are used, VMTK always resamples the
 rim into a circle, and the surface is blended into that circle over most of the
 extension's length; a shorter extension makes that blend steeper, and on a large
 irregular profile such as the main pulmonary artery a steep blend leaves a crease
@@ -136,8 +149,9 @@ extension. The extensions terminate
 in circular, planar rims, which makes capping exact, moves the inlet and outlet
 boundary conditions away from the bifurcations, and gives the extruded solid end
 rings that are planar and normal to the vessel axis, where the solid is pinned.
-Profiles are capped with a triangle fan around a new centre point, and that fan
-is then rebuilt.
+
+With or without extensions, profiles are capped with a triangle fan around a
+new centre point, and that fan is then rebuilt.
 
 A fan is not a mesh. VMTK resamples each rim into a regular polygon before
 fanning it, so every cap arrives as a ring of congruent slivers: on p16 that is
@@ -167,8 +181,9 @@ the p02 inlet the wall averages 1.87 mm and around `outlet11` it averages
 0.187 mm. A shared target would leave the smallest outlets with triangles wider
 than the outlet.
 
-The extension filter emits triangles whose winding does not follow the surface
-it was given, so consistent winding is re-established afterwards. Without that
+When extensions are used, the extension filter emits triangles whose winding
+does not follow the surface it was given, so consistent winding is
+re-established afterwards. Without that
 step the surface reaches cfMesh carrying more than a thousand apparent creases
 that are really opposed normals, and they end up as defects in the solid.
 

@@ -36,10 +36,11 @@ GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
 11. Round the concave saddles          Smooth only the bifurcation crotches, to a target
                                        radius of the local wall thickness / safety factor.
 12. Re-extract centerlines             The surface moved, so the diameters are recomputed.
-13. Add flow extensions                Extend each profile along its centerline direction by
-                                       --extension-diameters, ending in a circular planar rim.
-14. Re-establish winding               The extension filter leaves opposed normals; consistent
-                                       winding is restored here.
+13. Add flow extensions (optional)     Off by default (--extension-diameters 0). A positive
+                                       value extends each profile along its centerline
+                                       direction, ending in a circular planar rim.
+14. Re-establish winding               Only with extensions: the extension filter leaves
+                                       opposed normals; consistent winding is restored here.
 15. Re-measure the profiles            The rims have moved, so they are measured again.
 16. Cap the surface                    Triangle fan per opening, each tagged with its own
                                        entity id by the VMTK capper.

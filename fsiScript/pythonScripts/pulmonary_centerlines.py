@@ -603,9 +603,9 @@ def remesh_caps(
     Only the caps are rebuilt. The wall is handed to the remesher as an excluded
     region, so its triangles are not touched and the rim shared with each cap
     cannot move; the vessel surface that the thickness mapping and the solid
-    extrusion depend on is therefore bit-for-bit what it was. The caps stay in
-    their own planes, which the extensions made planar, so the openings remain
-    flat.
+    extrusion depend on is therefore bit-for-bit what it was. With flow
+    extensions the rims are planar and so are the rebuilt caps; without them
+    each cap spans the original, generally non-planar opening.
 
     Each cap is sized from the wall it meets rather than from a single global
     length, because the two ends of one geometry are nothing like each other: on
@@ -912,8 +912,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extension-diameters",
         type=float,
-        default=1.0,
-        help="flow-extension length per profile, in local diameters; 0 disables",
+        default=0.0,
+        help=(
+            "flow-extension length per profile, in local diameters (default: 0, "
+            "no extensions). Any positive value adds straight extensions "
+            "ending in circular, planar rims"
+        ),
     )
     return parser.parse_args()
 

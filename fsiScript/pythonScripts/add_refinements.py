@@ -152,10 +152,11 @@ def parse_args() -> argparse.Namespace:
         default=4.0,
         help=(
             "refinement sphere radius as a multiple of the profile radius "
-            "(default: 4). The sphere is centred on the extended rim, and a "
-            "flow extension of one diameter is itself two radii long, so the "
-            "sphere must span at least that to reach the cap's feeder vessel. "
-            "Shorten the extensions and this should come down with them"
+            "(default: 4). The sphere is centred on the rim. The default was "
+            "chosen when every profile had a one-diameter flow extension, two "
+            "radii long, which the sphere had to span to reach the cap's "
+            "feeder vessel; extensions are now off by default, and it has not "
+            "been retuned for that"
         ),
     )
     parser.add_argument(
