@@ -94,6 +94,9 @@ SunOS*Gcc*/
 /fsiScript/run/*
 !/fsiScript/run/.ignorethisfile
 
+# Archive of the extra test geometries; large, kept locally only
+/fsiScript/geometries/001.zip
+
 
 # other stuff
 .build
