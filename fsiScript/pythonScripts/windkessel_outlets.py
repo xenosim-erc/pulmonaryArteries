@@ -111,6 +111,14 @@ def parse_args() -> argparse.Namespace:
         "--rho", type=positive_float, default=1060.0,
         help="fluid density used by windkesselPressure (default: 1060)",
     )
+    parser.add_argument(
+        "--initial-pressure", type=float, default=0.0,
+        help=(
+            "pressure every outlet starts at [Pa] (default: 0). windkesselPressure "
+            "takes its starting pressure from 'value', which holds the kinematic "
+            "pressure p/rho, so this starts the compliance charged to it"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -122,6 +130,9 @@ def main() -> int:
 
     outlets = read_outlet_areas(profiles_csv)
     rho = read_density(args.transport_properties, args.rho)
+    if args.initial_pressure < 0.0:
+        raise ValueError("--initial-pressure must not be negative")
+    initial_value = args.initial_pressure / rho
     weights = [area ** (args.exponent / 2.0) for _, area in outlets]
     total_weight = sum(weights)
 
@@ -131,6 +142,8 @@ def main() -> int:
         f"//   Rp = {args.proximal_resistance:g} Pa s/m^3, "
         f"Rd = {args.distal_resistance:g} Pa s/m^3, C = {args.compliance:g} m^3/Pa",
         f"//   flow split Q ~ r^{args.exponent:g}, rho = {rho:g}",
+        f"//   initial pressure {args.initial_pressure:g} Pa "
+        f"(value = p/rho = {initial_value:.6g})",
         "//   Rch = Rp/f and R = Rd/f (inversely proportional to the flow",
         "//   fraction f); C = C*f (directly proportional to it).",
         "",
@@ -154,7 +167,7 @@ def main() -> int:
             f"    Rch         {rch:.6g};",
             f"    C           {c:.6g};",
             f"    rho         {rho:g};",
-            "    value       uniform 0;",
+            f"    value       uniform {initial_value:.6g};",
             "}",
             "",
         ]

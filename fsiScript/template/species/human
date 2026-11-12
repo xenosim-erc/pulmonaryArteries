@@ -1,0 +1,26 @@
+# Default parameters for human geometries, read by meshing.sh when
+# --species human is chosen. One "name value" pair per line; anything after
+# '#' is ignored. Each value can be overridden on the meshing.sh command line
+# with the option named beside it.
+
+# Inlet waveform in constant/fluid/inletFlow of the case templates
+inletFlow           humanFlow
+
+# Arterial wall, neoHookeanElastic (constant/solid/mechanicalProperties)
+wallDensity         1200        # kg/m^3     --wall-density
+wallYoungsModulus   300e3       # Pa         --wall-youngs-modulus
+wallPoissonRatio    0.45        # -          --wall-poisson-ratio
+
+# Three-element Windkessel totals for the whole distal bed, split across the
+# outlets by area (pythonScripts/windkessel_outlets.py)
+wkProximalResistance 3.3e6      # Pa s/m^3   --wk-proximal-resistance
+wkDistalResistance   2e7        # Pa s/m^3   --wk-distal-resistance
+wkCompliance         3.5e-8     # m^3/Pa     --wk-compliance
+
+# Pressure at the time of imaging: the prestress load, and the initial fluid
+# and Windkessel pressure of the fluid-solid interaction run
+prestressPressure   10          # mmHg       --prestress-pressure
+
+# Set to "yes" while any value above is a placeholder rather than a value
+# chosen for this species; meshing.sh then warns
+placeholder         no

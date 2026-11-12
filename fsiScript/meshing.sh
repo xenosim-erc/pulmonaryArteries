@@ -19,6 +19,8 @@ WINDKESSEL_SCRIPT="$SCRIPT_DIR/pythonScripts/windkessel_outlets.py"
 TEMPLATE_MESH_DIR="$SCRIPT_DIR/template/templateMesh"
 TEMPLATE_CASE_DIR="$SCRIPT_DIR/template/templateCase"
 TEMPLATE_CASE_ROBIN_DIR="$SCRIPT_DIR/template/templateCaseRobin"
+TEMPLATE_PRESTRESS_DIR="$SCRIPT_DIR/template/templatePrestress"
+SPECIES_DIR="$SCRIPT_DIR/template/species"
 RUN_DIR="$SCRIPT_DIR/run"
 
 # Allow an alternate cfMesh installation to be selected on systems where the
@@ -151,6 +153,10 @@ if [[ $# -eq 0 ]]; then
     echo "       [--wk-proximal-resistance VALUE] [--wk-distal-resistance VALUE]" >&2
     echo "       [--wk-compliance VALUE] [--flow-split-exponent VALUE]" >&2
     echo "       [--species human|porcine] [--heartbeats N] [--cores N]" >&2
+    echo "       [--wall-density VALUE] [--wall-youngs-modulus VALUE]" >&2
+    echo "       [--wall-poisson-ratio VALUE] [--prestress-pressure MMHG]" >&2
+    echo "       [--no-prestress] [--prestress-tolerance-fraction VALUE]" >&2
+    echo "       [--prestress-max-passes N] [--normal-smoothing-passes N]" >&2
     exit 2
 fi
 
@@ -185,6 +191,23 @@ thickness_smoothing_passes="10"
 # millimetre out, which is harmless because the thickness field is smooth there.
 # This stays small enough to still catch a units or geometry mismatch.
 max_mapping_distance="1.0"
+# Species defaults (template/species/<species>) fill whichever of these the
+# command line leaves empty.
+wall_density=""
+wall_youngs_modulus=""
+wall_poisson_ratio=""
+prestress_pressure=""
+# Prestress: computed by the run case before the FSI run unless --no-prestress.
+# Passes stop once the wall moves less than this fraction of the thinnest
+# wall, or after the maximum number of passes.
+prestress="yes"
+prestress_tolerance_fraction="0.1"
+prestress_max_passes="30"
+# Smoothing that scales with the wall thickness; empty means "derive from
+# --extrusion-percentage" (see below).
+saddle_dilation=""
+saddle_iterations=""
+normal_smoothing_passes=""
 
 # Read the output-related options without removing them from the array that is
 # passed to pulmonary_centerlines.py. Both --option value and --option=value
@@ -394,6 +417,108 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --max-mapping-distance=*)
             max_mapping_distance="${argument#*=}"
             ;;
+        --wall-density)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-density requires a value" >&2
+                exit 2
+            }
+            wall_density="${arguments[$index]}"
+            ;;
+        --wall-density=*)
+            wall_density="${argument#*=}"
+            ;;
+        --wall-youngs-modulus)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-youngs-modulus requires a value" >&2
+                exit 2
+            }
+            wall_youngs_modulus="${arguments[$index]}"
+            ;;
+        --wall-youngs-modulus=*)
+            wall_youngs_modulus="${argument#*=}"
+            ;;
+        --wall-poisson-ratio)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-poisson-ratio requires a value" >&2
+                exit 2
+            }
+            wall_poisson_ratio="${arguments[$index]}"
+            ;;
+        --wall-poisson-ratio=*)
+            wall_poisson_ratio="${argument#*=}"
+            ;;
+        --prestress-pressure)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --prestress-pressure requires a value" >&2
+                exit 2
+            }
+            prestress_pressure="${arguments[$index]}"
+            ;;
+        --prestress-pressure=*)
+            prestress_pressure="${argument#*=}"
+            ;;
+        --prestress-tolerance-fraction)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --prestress-tolerance-fraction requires a value" >&2
+                exit 2
+            }
+            prestress_tolerance_fraction="${arguments[$index]}"
+            ;;
+        --prestress-tolerance-fraction=*)
+            prestress_tolerance_fraction="${argument#*=}"
+            ;;
+        --prestress-max-passes)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --prestress-max-passes requires a value" >&2
+                exit 2
+            }
+            prestress_max_passes="${arguments[$index]}"
+            ;;
+        --prestress-max-passes=*)
+            prestress_max_passes="${argument#*=}"
+            ;;
+        --no-prestress)
+            prestress="no"
+            ;;
+        --saddle-dilation)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --saddle-dilation requires a value" >&2
+                exit 2
+            }
+            saddle_dilation="${arguments[$index]}"
+            ;;
+        --saddle-dilation=*)
+            saddle_dilation="${argument#*=}"
+            ;;
+        --saddle-iterations)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --saddle-iterations requires a value" >&2
+                exit 2
+            }
+            saddle_iterations="${arguments[$index]}"
+            ;;
+        --saddle-iterations=*)
+            saddle_iterations="${argument#*=}"
+            ;;
+        --normal-smoothing-passes)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --normal-smoothing-passes requires a value" >&2
+                exit 2
+            }
+            normal_smoothing_passes="${arguments[$index]}"
+            ;;
+        --normal-smoothing-passes=*)
+            normal_smoothing_passes="${argument#*=}"
+            ;;
     esac
 done
 
@@ -417,6 +542,31 @@ fi
 
 echo "Gaussian smoothing sigma: $gaussian_sigma"
 echo "Extrusion percentage: $extrusion_percentage%"
+
+# Smoothing that scales with the wall thickness. A wall folds wherever it is
+# thicker than the local concave radius, so a thicker wall needs the rounding
+# spread over a proportionally wider region. 5% is the reference, tested on 94
+# geometries: 20 extrusion-normal passes, saddle region grown by 3 rings over
+# 20 passes. The region a smoothing reaches grows with the square root of its
+# passes, so passes scale with the square of the ratio and the saddle region
+# width with the ratio itself. Below 5% the reference values are kept, so a
+# thinner wall is never smoothed less than the tested case. Each can be set
+# explicitly instead.
+smoothing_ratio="$(awk -v e="$extrusion_percentage" 'BEGIN { r = e / 5.0; if (r < 1) r = 1; printf "%.6g", r }')"
+scaled_count() {
+    awk -v base="$1" -v r="$smoothing_ratio" -v power="$2" \
+        'BEGIN { printf "%d", int(base * r ^ power + 0.5) }'
+}
+normal_smoothing_passes="${normal_smoothing_passes:-$(scaled_count 20 2)}"
+saddle_dilation="${saddle_dilation:-$(scaled_count 3 1)}"
+saddle_iterations="${saddle_iterations:-$(scaled_count 20 2)}"
+for count_name in normal_smoothing_passes saddle_dilation saddle_iterations; do
+    if [[ ! "${!count_name}" =~ ^[0-9]+$ ]]; then
+        echo "Error: --${count_name//_/-} must be a whole number, not '${!count_name}'" >&2
+        exit 2
+    fi
+done
+echo "Smoothing: $normal_smoothing_passes extrusion-normal passes; saddle region $saddle_dilation rings, $saddle_iterations passes"
 
 # The two formulations need different interface conditions, so each has its own
 # case template. Robin cases are named with a Robin suffix so both can be
@@ -487,17 +637,55 @@ fi
 case "${species,,}" in
     h|human)
         species="human"
-        inlet_flow_file="humanFlow"
         ;;
     p|pig|porcine)
         species="porcine"
-        inlet_flow_file="pigFlow"
         ;;
     *)
         echo "Error: --species must be 'human' or 'porcine', not '$species'" >&2
         exit 2
         ;;
 esac
+
+# Each species has a file of defaults: the inlet waveform, the wall material,
+# the Windkessel totals and the imaging (prestress) pressure. A value given on
+# the command line, or typed at a prompt, takes precedence.
+species_file="$SPECIES_DIR/$species"
+if [[ ! -f "$species_file" ]]; then
+    echo "Error: species defaults not found: $species_file" >&2
+    exit 1
+fi
+species_value() {
+    local value
+    value="$(awk -v key="$1" '
+        { sub(/#.*/, "") }
+        $1 == key && NF >= 2 { print $2; found = 1; exit }
+        END { if (!found) exit 1 }
+    ' "$species_file")" || {
+        echo "Error: '$1' is missing from $species_file" >&2
+        exit 1
+    }
+    printf '%s\n' "$value"
+}
+inlet_flow_file="$(species_value inletFlow)"
+wall_density="${wall_density:-$(species_value wallDensity)}"
+wall_youngs_modulus="${wall_youngs_modulus:-$(species_value wallYoungsModulus)}"
+wall_poisson_ratio="${wall_poisson_ratio:-$(species_value wallPoissonRatio)}"
+default_wk_proximal_resistance="$(species_value wkProximalResistance)"
+default_wk_distal_resistance="$(species_value wkDistalResistance)"
+default_wk_compliance="$(species_value wkCompliance)"
+default_prestress_pressure="$(species_value prestressPressure)"
+species_placeholder="$(species_value placeholder)"
+require_positive_number "$wall_density" --wall-density
+require_positive_number "$wall_youngs_modulus" --wall-youngs-modulus
+if ! awk -v v="$wall_poisson_ratio" 'BEGIN { exit !(v ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && v + 0 >= 0 && v + 0 < 0.5) }'; then
+    echo "Error: --wall-poisson-ratio must be in [0, 0.5), not '$wall_poisson_ratio'" >&2
+    exit 2
+fi
+if [[ "$species_placeholder" == "yes" ]]; then
+    echo "Warning: $species_file is marked as placeholder values; its wall and" >&2
+    echo "Windkessel defaults have not been chosen for this species yet." >&2
+fi
 if [[ ! -f "$case_template/constant/fluid/inletFlow/$inlet_flow_file" ]]; then
     echo "Error: inlet flow file not found: $case_template/constant/fluid/inletFlow/$inlet_flow_file" >&2
     exit 1
@@ -540,27 +728,58 @@ echo "Cores: $cores"
 # pythonScripts/windkessel_outlets.py. Pressing Enter accepts the defaults.
 if [[ -z "$wk_proximal_resistance" ]]; then
     if [[ -t 0 ]]; then
-        read -r -p "Total proximal resistance Rp, Pa s/m^3 [3.3e6]: " wk_proximal_resistance
+        read -r -p "Total proximal resistance Rp, Pa s/m^3 [${default_wk_proximal_resistance}]: " wk_proximal_resistance
     fi
-    wk_proximal_resistance="${wk_proximal_resistance:-3.3e6}"
+    wk_proximal_resistance="${wk_proximal_resistance:-$default_wk_proximal_resistance}"
 fi
 if [[ -z "$wk_distal_resistance" ]]; then
     if [[ -t 0 ]]; then
-        read -r -p "Total distal resistance Rd, Pa s/m^3 [2e7]: " wk_distal_resistance
+        read -r -p "Total distal resistance Rd, Pa s/m^3 [${default_wk_distal_resistance}]: " wk_distal_resistance
     fi
-    wk_distal_resistance="${wk_distal_resistance:-2e7}"
+    wk_distal_resistance="${wk_distal_resistance:-$default_wk_distal_resistance}"
 fi
 if [[ -z "$wk_compliance" ]]; then
     if [[ -t 0 ]]; then
-        read -r -p "Total compliance C, m^3/Pa [3.5e-8]: " wk_compliance
+        read -r -p "Total compliance C, m^3/Pa [${default_wk_compliance}]: " wk_compliance
     fi
-    wk_compliance="${wk_compliance:-3.5e-8}"
+    wk_compliance="${wk_compliance:-$default_wk_compliance}"
 fi
 require_positive_number "$wk_proximal_resistance" --wk-proximal-resistance
 require_positive_number "$wk_distal_resistance" --wk-distal-resistance
 require_positive_number "$wk_compliance" --wk-compliance
 require_positive_number "$flow_split_exponent" --flow-split-exponent
 echo "Windkessel totals: Rp $wk_proximal_resistance, Rd $wk_distal_resistance, C $wk_compliance"
+echo "Wall: neoHookeanElastic, rho $wall_density kg/m^3, E $wall_youngs_modulus Pa, nu $wall_poisson_ratio"
+
+# The pressure at the time of imaging. The imaged wall is loaded by it, so the
+# prestress run finds the stress state in equilibrium with it, and the FSI run
+# starts from it: the fluid and every Windkessel outlet are initialised to it.
+if [[ -z "$prestress_pressure" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "Imaging (prestress) pressure, mmHg [$default_prestress_pressure]: " prestress_pressure
+    fi
+    prestress_pressure="${prestress_pressure:-$default_prestress_pressure}"
+fi
+if ! awk -v v="$prestress_pressure" 'BEGIN { exit !(v ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && v + 0 >= 0) }'; then
+    echo "Error: --prestress-pressure must be a non-negative number of mmHg, not '$prestress_pressure'" >&2
+    exit 2
+fi
+# 1 mmHg = 133.322 Pa
+prestress_pressure_pa="$(awk -v p="$prestress_pressure" 'BEGIN { printf "%.6g", p * 133.322387415 }')"
+if [[ "$prestress" == "yes" ]]; then
+    require_positive_number "$prestress_tolerance_fraction" --prestress-tolerance-fraction
+    if [[ ! "$prestress_max_passes" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --prestress-max-passes must be a positive whole number, not '$prestress_max_passes'" >&2
+        exit 2
+    fi
+    if ! awk -v p="$prestress_pressure_pa" 'BEGIN { exit !(p + 0 > 0) }'; then
+        echo "Error: prestress needs a positive --prestress-pressure; use --no-prestress for none" >&2
+        exit 2
+    fi
+    echo "Prestress: $prestress_pressure mmHg ($prestress_pressure_pa Pa), up to $prestress_max_passes passes"
+else
+    echo "Prestress: off; the FSI run still starts at $prestress_pressure mmHg"
+fi
 echo "Outlet flow split: Q ~ r^$flow_split_exponent"
 
 # Both stages need the Gaussian and extrusion options: Gauss.py turns them into
@@ -572,10 +791,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -595,6 +814,8 @@ done
 geometry_arguments+=(
     --gaussian-sigma "$gaussian_sigma"
     --extrusion-percentage "$extrusion_percentage"
+    --saddle-dilation "$saddle_dilation"
+    --saddle-iterations "$saddle_iterations"
 )
 
 # With no explicit output directory, derive the case name from the first
@@ -627,6 +848,8 @@ print_settings() {
         "Gaussian sigma:" "$gaussian_sigma" \
         "Extrusion percentage:" "$extrusion_percentage" \
         "Thickness smoothing passes:" "$thickness_smoothing_passes" \
+        "Saddle smoothing:" "$saddle_dilation rings, $saddle_iterations passes" \
+        "Extrusion-normal smoothing:" "$normal_smoothing_passes passes" \
         "Cells per radius:" "$cells_per_radius" \
         "Sphere radius factor:" "$sphere_radius_factor" \
         "Max refinement levels:" "$maximum_refinement_levels" \
@@ -638,7 +861,13 @@ print_settings() {
         "Windkessel Rp [Pa s/m^3]:" "$wk_proximal_resistance" \
         "Windkessel Rd [Pa s/m^3]:" "$wk_distal_resistance" \
         "Windkessel C [m^3/Pa]:" "$wk_compliance" \
-        "Flow-split exponent:" "$flow_split_exponent"
+        "Flow-split exponent:" "$flow_split_exponent" \
+        "Wall density [kg/m^3]:" "$wall_density" \
+        "Wall Young's modulus [Pa]:" "$wall_youngs_modulus" \
+        "Wall Poisson ratio:" "$wall_poisson_ratio" \
+        "Imaging pressure:" "$prestress_pressure mmHg ($prestress_pressure_pa Pa)" \
+        "Prestress:" "$prestress$( [[ "$prestress" == yes ]] && printf ' (tolerance %s x thinnest wall, max %s passes)' "$prestress_tolerance_fraction" "$prestress_max_passes")" \
+        "Species defaults:" "$species_file$( [[ "$species_placeholder" == yes ]] && printf ' (PLACEHOLDER values)')"
     if (( ${#passthrough_arguments[@]} > 0 )); then
         printf '%-28s %s\n' "Other geometry options:" "${passthrough_arguments[*]}"
     fi
@@ -680,6 +909,14 @@ profile_count="${profile_count:-0}"
 # trailing '/.' copies the contents, producing fluidMeshing and varExtrudeFunc
 # directly below the case directory while retaining the generated geometry.
 cp -a "$TEMPLATE_MESH_DIR/." "$output_dir/"
+
+var_extrude_dict="$output_dir/varExtrudeFunc/system/varExtrudeMeshDict"
+sed -i -E "s/^([[:space:]]*nNormalSmoothingIterations[[:space:]]+)[0-9]+;/\1$normal_smoothing_passes;/" \
+    "$var_extrude_dict"
+if ! grep -Eq "^[[:space:]]*nNormalSmoothingIterations[[:space:]]+$normal_smoothing_passes;" "$var_extrude_dict"; then
+    echo "Error: could not set nNormalSmoothingIterations in $var_extrude_dict" >&2
+    exit 1
+fi
 
 # Convert the newly capped, watertight STL to cfMesh's FMS format. Keep the FMS
 # in the fluidMeshing case root and make meshDict refer to this case-specific
@@ -1190,6 +1427,57 @@ echo "Created coupled run case in: $run_case"
 echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
 echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
 
+# Wall material and prestress switch. Only the active (uncommented) entries
+# of the first law are changed; each is checked afterwards.
+solid_properties="$run_case/constant/solid/mechanicalProperties"
+sed -i -E \
+    -e "0,/^[[:space:]]*rho[[:space:]]+rho[[:space:]]/s/^([[:space:]]*rho[[:space:]]+rho[[:space:]]+\[[^]]*\][[:space:]]+)[^;]+;/\1$wall_density;/" \
+    -e "0,/^[[:space:]]*E[[:space:]]+E[[:space:]]/s/^([[:space:]]*E[[:space:]]+E[[:space:]]+\[[^]]*\][[:space:]]+)[^;]+;/\1$wall_youngs_modulus;/" \
+    -e "0,/^[[:space:]]*nu[[:space:]]+nu[[:space:]]/s/^([[:space:]]*nu[[:space:]]+nu[[:space:]]+\[[^]]*\][[:space:]]+)[^;]+;/\1$wall_poisson_ratio;/" \
+    -e "s/^([[:space:]]*prestress[[:space:]]+)[a-z]+;/\1$prestress;/" \
+    "$solid_properties"
+for check in "rho[[:space:]]+rho[[:space:]]+\[[^]]*\][[:space:]]+$wall_density;" \
+             "E[[:space:]]+E[[:space:]]+\[[^]]*\][[:space:]]+$wall_youngs_modulus;" \
+             "nu[[:space:]]+nu[[:space:]]+\[[^]]*\][[:space:]]+$wall_poisson_ratio;" \
+             "prestress[[:space:]]+$prestress;"; do
+    if ! grep -Eq "^[[:space:]]*$check" "$solid_properties"; then
+        echo "Error: could not set '$check' in $solid_properties" >&2
+        exit 1
+    fi
+done
+echo "Wall material set in: $solid_properties (prestress $prestress)"
+
+# The FSI run starts at the imaging pressure, so the prestressed wall starts
+# in equilibrium. The fluid pressure is kinematic (p/rho).
+fluid_density="$(awk '$1 == "rho" { v = $NF; sub(/;.*/, "", v); print v; exit }' \
+    "$run_case/constant/fluid/transportProperties")"
+require_positive_number "$fluid_density" "rho in constant/fluid/transportProperties"
+initial_kinematic_pressure="$(awk -v p="$prestress_pressure_pa" -v r="$fluid_density" 'BEGIN { printf "%.6g", p / r }')"
+run_pressure="$run_case/0/fluid/p"
+sed -i -E "0,/^internalField[[:space:]]/s/^(internalField[[:space:]]+uniform[[:space:]]+)[^;]+;/\1$initial_kinematic_pressure;/" \
+    "$run_pressure"
+if ! grep -Eq "^internalField[[:space:]]+uniform[[:space:]]+$initial_kinematic_pressure;" "$run_pressure"; then
+    echo "Error: could not set the initial pressure in $run_pressure" >&2
+    exit 1
+fi
+echo "Initial fluid pressure: $prestress_pressure_pa Pa ($initial_kinematic_pressure m^2/s^2)"
+
+# The prestress case. Its Allrun takes the wall material and the solid mesh
+# from the run case each time it runs, so only the load and stopping rule are
+# set here; the tolerance is set once the wall thickness is known, below.
+if [[ "$prestress" == "yes" ]]; then
+    if [[ ! -d "$TEMPLATE_PRESTRESS_DIR" ]]; then
+        echo "Error: prestress template not found: $TEMPLATE_PRESTRESS_DIR" >&2
+        exit 1
+    fi
+    cp -a "$TEMPLATE_PRESTRESS_DIR" "$run_case/prestress"
+    printf '(\n    (0 0)\n    (1 %s)\n)\n' "$prestress_pressure_pa" \
+        > "$run_case/prestress/constant/timeVsPressure.ramp"
+    printf '(\n    (0 %s)\n    (1 %s)\n)\n' "$prestress_pressure_pa" "$prestress_pressure_pa" \
+        > "$run_case/prestress/constant/timeVsPressure.full"
+    echo "Created prestress case in: $run_case/prestress"
+fi
+
 # Point the inlet at the waveform for the chosen species.
 run_velocity="$run_case/0/fluid/U"
 sed -i -E "s#(file[[:space:]]+\"<constant>/fluid/inletFlow/)[A-Za-z]+(\";)#\1$inlet_flow_file\2#" \
@@ -1209,7 +1497,8 @@ fi
 echo "Set endTime to $end_time s ($heartbeats heartbeat(s))"
 
 for decompose_dict in "$run_case"/system/decomposeParDict \
-                      "$run_case"/system/{fluid,solid}/decomposeParDict; do
+                      "$run_case"/system/{fluid,solid}/decomposeParDict \
+                      "$run_case"/prestress/system/decomposeParDict; do
     [[ -f "$decompose_dict" ]] || continue
     sed -i -E "s/^([[:space:]]*numberOfSubdomains[[:space:]]+)[0-9]+;/\1$cores;/" \
         "$decompose_dict"
@@ -1242,7 +1531,28 @@ echo "Splitting the Windkessel totals across the outlets..."
     --compliance "$wk_compliance" \
     --exponent "$flow_split_exponent" \
     --transport-properties "$run_case/constant/fluid/transportProperties" \
+    --initial-pressure "$prestress_pressure_pa" \
     | tee "$run_case/log.windkesselOutlets"
+
+# Prestress stopping rule: the passes stop once the wall moves less than a
+# fraction of its thinnest point. The thickness is in STL units, as is the
+# solid mesh before scaling, so it is scaled to the run-case units here.
+if [[ "$prestress" == "yes" ]]; then
+    min_wall_thickness="$(awk '/minimum distance:/ { print $NF; exit }' \
+        "$solid_case/log.varExtrudeMesh")"
+    require_positive_number "$min_wall_thickness" "the minimum wall thickness in $solid_case/log.varExtrudeMesh"
+    prestress_tolerance="$(awk -v f="$prestress_tolerance_fraction" -v t="$min_wall_thickness" -v s="$scale_factor" \
+        'BEGIN { printf "%.4g", f * t * s }')"
+    prestress_allrun="$run_case/prestress/Allrun"
+    sed -i -E -e "s/^tolerance=.*/tolerance=$prestress_tolerance/" \
+        -e "s/^maxPasses=.*/maxPasses=$prestress_max_passes/" "$prestress_allrun"
+    if ! grep -qx "tolerance=$prestress_tolerance" "$prestress_allrun" ||
+       ! grep -qx "maxPasses=$prestress_max_passes" "$prestress_allrun"; then
+        echo "Error: could not set the stopping rule in $prestress_allrun" >&2
+        exit 1
+    fi
+    echo "Prestress stops at maxMag(D) < $prestress_tolerance ($prestress_tolerance_fraction x thinnest wall $min_wall_thickness x scale $scale_factor), at most $prestress_max_passes passes"
+fi
 
 # Scale only the run-case copies, so the intermediate meshes keep the STL
 # units and stay consistent with the thickness map and surfaces beside them.
@@ -1279,6 +1589,9 @@ params_file="$run_case/meshing.params"
     echo
     print_settings
     printf '%-28s %s\n' "Fluid cells:" "${fluid_cells:-unknown}"
+    if [[ "$prestress" == "yes" ]]; then
+        printf '%-28s %s\n' "Prestress tolerance:" "$prestress_tolerance (maxMag(D), run-case units)"
+    fi
     if grep -q '^WARNING: cap remeshing failed' "$geometry_log"; then
         printf '%-28s %s\n' "Cap triangles:" \
             "fan caps kept; cap remeshing failed (see log.geometry)"

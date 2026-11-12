@@ -34,8 +34,10 @@ GEOMETRY STAGE  (pythonScripts/pulmonary_centerlines.py)
                                        area and centroid.
 10. Extract centerlines                VMTK, sourced from the largest profile to all others;
                                        carries MaximumInscribedSphereRadius.
-11. Round the concave saddles          Smooth only the bifurcation crotches, to a target
-                                       radius of the local wall thickness / safety factor.
+11. Round the concave saddles          Smooth only the concave points, to a target radius of
+                                       the local wall thickness / safety factor, over a region
+                                       grown by 3 rings and 20 passes at 5% extrusion (scaled
+                                       up with it above that).
 12. Re-extract centerlines             The surface moved, so the diameters are recomputed.
 13. Add flow extensions (optional)     Off by default (--extension-diameters 0). A positive
                                        value extends each profile along its centerline
@@ -93,8 +95,9 @@ SOLID MESH
 ----------
 32. Extrude the solid wall             varExtrudeMesh offsets the fluid wall along its point
                                        normals by the mapped thickness, in 3 layers. The
-                                       normals are first smoothed over 20 passes, each turned
-                                       at most 45 degrees from the wall normal.
+                                       normals are first smoothed (20 passes at 5% extrusion,
+                                       scaling with its square above that), each turned at
+                                       most 45 degrees from the wall normal.
 33. Drop the temporary fluid patch      createPatch removes the now-unneeded zero-face patch.
 34. Name the solid walls                Exposed face becomes 'innerWall' (conformal with the
                                         fluid wall), the extruded face 'outerWall'.
@@ -114,28 +117,40 @@ CASE ASSEMBLY
 38. Copy the case template              templateCaseRobin (default) or templateCase into
                                         run/<name>; the name is checked again here.
 39. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
-40. Point the inlet at its waveform    0/fluid/U reads humanFlow or pigFlow from
+40. Set the wall and start pressure    Wall density, Young's modulus and Poisson's ratio from
+                                        template/species/<species> (or the command line) into
+                                        constant/solid/mechanicalProperties, with prestress
+                                        yes|no. 0/fluid/p starts at the imaging pressure.
+41. Add the prestress case             template/templatePrestress into run/<name>/prestress,
+                                        with the imaging pressure (default 10 mmHg) as its
+                                        load. Its Allrun, run by the case's Allrun before the
+                                        FSI run, repeats solids4Foam + updatePrestress until the
+                                        wall moves less than 0.1 x the thinnest wall (at most
+                                        30 passes) and copies Fpre to 0/solid/Fpre. Skipped
+                                        with --no-prestress.
+42. Point the inlet at its waveform    0/fluid/U reads humanFlow or pigFlow from
                                         constant/fluid/inletFlow, per --species (asked for;
                                         default human). endTime is set to --heartbeats
                                         (asked for; default 3) times the cycle length, the
                                         last time in that file.
-41. Set the core count                 numberOfSubdomains in every decomposeParDict and
+43. Set the core count                 numberOfSubdomains in every decomposeParDict and
                                         --ntasks in run.slurm, per --cores (asked for;
                                         default 16); prints fluid cells per processor.
                                         The Slurm job is named after the run case.
-42. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
+44. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
                                         outlets by area^(k/2), k = --flow-split-exponent
-                                        (default 2), into 0/fluid/windkesselOutlets. The
+                                        (default 2), into 0/fluid/windkesselOutlets, each
+                                        starting at the imaging pressure. The
                                         outlets are recombined in parallel and checked
                                         against the totals; see log.windkesselOutlets.
-43. Scale the run-case meshes           transformPoints -scale on both regions, by
+45. Scale the run-case meshes           transformPoints -scale on both regions, by
                                         --scale-factor (asked for; default 0.001, mm to m).
                                         The intermediate meshes keep the STL units. No
                                         log is kept; the output is shown only on failure.
-44. Record the settings                 run/<name>/meshing.params: the command line, the
+46. Record the settings                 run/<name>/meshing.params: the command line, the
                                         repository commit and every resolved setting.
-45. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
-46. Print the next steps                cd into the case and sbatch, or repeat the solid-mesh
+47. Offer to clean up                   Optionally remove the intermediate caseFiles directory.
+48. Print the next steps                cd into the case and sbatch, or repeat the solid-mesh
                                         warning if the check failed.
 
 

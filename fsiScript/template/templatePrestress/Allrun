@@ -1,0 +1,214 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+# Compute the prestress Fpre of the imaged arterial wall
+#
+# The imaged geometry is loaded by the blood pressure at the time of imaging,
+# so it is not stress-free. This solid-only case applies that pressure to
+# innerWall and repeats a modified updated Lagrangian (MULF) pass until the
+# imaged wall is in equilibrium with it:
+#
+#   1. solids4Foam runs a steady-state solve under the pressure;
+#   2. updatePrestress composes the deformation gradient of that run with the
+#      Fpre it used, Fpre <- F & Fpre, writes it to 0/Fpre and removes the
+#      later time directories, so the next pass starts again from the imaged
+#      geometry with zero displacement.
+#
+# Pass 1 runs with "prestress no" and ramps the pressure up from zero. Later
+# passes run with "prestress yes" and apply the full pressure in one step: the
+# wall already carries the Fpre stresses, which balance it, and ramping it
+# again would first deflate the prestressed wall, which the solver does not
+# converge through.
+#
+# Passes stop once the maximum displacement of a run, maxMag(D) in
+# prestressHistory, is below the tolerance, or after maxPasses. meshing.sh
+# sets both below, and the pressure in constant/timeVsPressure.{ramp,full}.
+# The final Fpre is copied to ../0/solid/Fpre for the fluid-solid interaction
+# run, which uses the same material: constant/mechanicalProperties is copied
+# from ../constant/solid/mechanicalProperties, and the solid mesh from
+# ../constant/solid/polyMesh, at the start of every run.
+#
+# Usage:
+#   ./Allrun           # run in parallel, numberOfSubdomains in
+#                      # system/decomposeParDict
+#   ./Allrun serial    # run in serial
+#------------------------------------------------------------------------------
+
+set -Eeo pipefail
+IFS=$'\n\t'
+
+cd "$(cd "$(dirname "$0")" && pwd)"
+
+: "${WM_PROJECT_DIR:?OpenFOAM environment is not sourced}"
+
+source solids4FoamScripts.sh
+
+# Stop when maxMag(D) of a run is below this, in metres (set by meshing.sh)
+tolerance=1e-5
+
+# Give up after this many passes (set by meshing.sh)
+maxPasses=30
+
+runParallel=yes
+
+for arg in "$@"
+do
+    case "$arg" in
+        serial)
+            runParallel=no
+            ;;
+        parallel)
+            runParallel=yes
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: ./Allrun [serial|parallel]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+solids4Foam::requirePetscOrExitSilently
+solids4Foam::caseDoesNotRunWithFoamExtend
+
+# The wall material and mesh are defined once, in the fluid-solid interaction
+# case, so that Fpre is computed for exactly what that run solves
+materialFile=../constant/solid/mechanicalProperties
+solidMesh=../constant/solid/polyMesh
+
+for required in "$materialFile" "$solidMesh"
+do
+    if [ ! -e "$required" ]
+    then
+        echo "Not found: $required" >&2
+        exit 1
+    fi
+done
+
+cp "$materialFile" constant/mechanicalProperties
+rm -rf constant/polyMesh
+cp -a "$solidMesh" constant/polyMesh
+
+if ! grep -Eq "^[[:space:]]*prestress[[:space:]]+[a-z]+;" constant/mechanicalProperties
+then
+    echo "No 'prestress yes|no;' line in $materialFile" >&2
+    exit 1
+fi
+
+# Set "prestress yes|no;" in constant/mechanicalProperties. Only a line that
+# starts with the keyword is changed, so comments are left alone
+setPrestress()
+{
+    local file=constant/mechanicalProperties
+    sed -E "s/^([[:space:]]*prestress[[:space:]]+)[a-z]+;/\1$1;/" \
+        "$file" > "$file.tmp"
+    mv "$file.tmp" "$file"
+}
+
+# Inner-wall pressure, read by 0/D from constant/timeVsPressure
+setPressure()
+{
+    cp "constant/timeVsPressure.$1" constant/timeVsPressure
+}
+
+# Time step in system/controlDict (endTime 1): pass 1 ramps the pressure over
+# four load steps, later passes hold it in a single step
+rampDeltaT=0.25
+fullDeltaT=1
+
+setDeltaT()
+{
+    local file=system/controlDict
+    sed -E "s/^([[:space:]]*deltaT[[:space:]]+)[^;]+;/\1$1;/" \
+        "$file" > "$file.tmp"
+    mv "$file.tmp" "$file"
+}
+
+trap 'setDeltaT "$rampDeltaT"' EXIT
+
+# Run an application in serial or parallel, logging to log.<app>.p<pass>
+run()
+{
+    local pass="$1"
+    shift
+    if [ "$runParallel" = yes ]
+    then
+        solids4Foam::runParallel -o -s "p$pass" "$@"
+    else
+        solids4Foam::runApplication -o -s "p$pass" "$@"
+    fi
+}
+
+# maxMag(D) of the latest run, column 2 of the last line of prestressHistory
+latestMaxD()
+{
+    awk '$1 !~ /^#/ && NF >= 2 { d = $2 } END { print d }' prestressHistory
+}
+
+# Start from no prestress. updatePrestress refuses an Fpre in 0 that the run
+# did not use, so any left from an earlier run is removed
+rm -rf processor[0-9]* [1-9]* 0.[0-9]*
+rm -f 0/Fpre 0/Fpre.gz 0/FprePass* prestressHistory
+setPrestress no
+
+if [ "$runParallel" = yes ]
+then
+    solids4Foam::runApplication -o decomposePar -force
+fi
+
+converged=no
+for pass in $(seq 1 "$maxPasses")
+do
+    if [ "$pass" -eq 1 ]
+    then
+        setPressure ramp
+        setDeltaT "$rampDeltaT"
+    else
+        setPressure full
+        setDeltaT "$fullDeltaT"
+    fi
+
+    run "$pass" solids4Foam
+    if [ "$runParallel" = yes ]
+    then
+        run "$pass" updatePrestress -parallel
+    else
+        run "$pass" updatePrestress
+    fi
+
+    # Passes after the first apply the Fpre just written
+    if [ "$pass" -eq 1 ]
+    then
+        setPrestress yes
+    fi
+
+    maxD="$(latestMaxD)"
+    echo "Prestress pass $pass of at most $maxPasses: maxMag(D) $maxD m (tolerance $tolerance m)"
+    if awk -v d="$maxD" -v t="$tolerance" 'BEGIN { exit !(d != "" && d + 0 < t + 0) }'
+    then
+        converged=yes
+        break
+    fi
+done
+
+if [ "$runParallel" = yes ]
+then
+    solids4Foam::runApplication -o reconstructPar -withZero -fields '(Fpre)'
+    rm -rf processor[0-9]*
+fi
+
+cp 0/Fpre ../0/solid/Fpre
+
+echo "Prestress history (maxMag(D), rmsMag(D) and maxMag(F-I) should fall with each pass):"
+cat prestressHistory
+
+if [ "$converged" = yes ]
+then
+    echo "Prestress converged after $pass pass(es)."
+else
+    echo "WARNING: prestress did not reach maxMag(D) < $tolerance m in $maxPasses passes." >&2
+    echo "The latest Fpre was still copied to ../0/solid/Fpre; check prestressHistory." >&2
+    echo "PRESTRESS NOT CONVERGED after $maxPasses passes: maxMag(D) $maxD m, tolerance $tolerance m" \
+        > PRESTRESS_NOT_CONVERGED
+fi
+
+#------------------------------------------------------------------------------

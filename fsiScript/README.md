@@ -38,6 +38,12 @@ become. `--saddle-dilation 8 --saddle-iterations 50` rounds more and fixed a
 few more solids in testing, but moves about three times as much of the
 surface (a median of 11% against 4%), so it is kept for cases that still
 fail.
+
+Both scale with the wall thickness, like the extrusion-normal smoothing: the
+values above are those for the reference extrusion of 5%, and above it the
+region grows as `3 x (extrusion / 5)` rings over `20 x (extrusion / 5)^2`
+passes (6 rings and 80 passes at 10%). Below 5% the reference values are
+kept. Either option set explicitly takes precedence.
 Because this moves the surface, the centerlines are re-extracted afterwards.
 
 On the supplied geometries at 8% extrusion this moves 2-3% of the surface and
@@ -97,6 +103,13 @@ and extrude the wall into the fluid. On the 94 test geometries this took the
 clean solids from 31 to 62 and the negative-volume cells from 420 to 69, with
 an average tilt of about 3 degrees. The remaining failures are mostly scans
 with folded-back patches, which need repairing.
+
+The number of passes scales with the wall thickness: 20 at the reference
+extrusion of 5%, and `20 x (extrusion / 5)^2` above it, so 80 at 10%. A wall
+folds wherever it is thicker than the local concave radius, so a thicker wall
+needs the change of direction spread over a wider region, and a smoothing
+reaches a distance that grows with the square root of its passes. Below 5% the
+reference value is kept. `--normal-smoothing-passes` sets it directly.
 
 ### Solid mesh check
 
@@ -330,6 +343,58 @@ As a check, the script recombines the values it wrote: the resistances in
 parallel (`1 / sum(1/R_i)`) and the compliances summed. It compares the results
 with the requested totals and stops if any differs by more than 1e-4. The
 comparison table is printed and saved in the run case's `log.windkesselOutlets`.
+
+### Species defaults
+
+The parameters that differ between species live in one file per species,
+`template/species/human` and `template/species/porcine`: the inlet waveform,
+the wall material (density, Young's modulus and Poisson's ratio of the
+`neoHookeanElastic` wall), the Windkessel totals and the imaging pressure.
+`--species` picks the file. Every value can be overridden on the command line
+(`--wall-density`, `--wall-youngs-modulus`, `--wall-poisson-ratio`,
+`--wk-proximal-resistance`, `--wk-distal-resistance`, `--wk-compliance`,
+`--prestress-pressure`); the Windkessel totals and the imaging pressure are
+also asked for when run interactively, with the species values as the
+defaults. The chosen values are written into the run case's
+`constant/solid/mechanicalProperties` and recorded in `meshing.params`.
+
+The porcine file currently repeats the human wall and Windkessel values and is
+marked `placeholder yes`, so `meshing.sh` warns whenever it is used. Replace
+the values with porcine ones and set `placeholder no`.
+
+### Prestress
+
+Images show the artery loaded by the blood pressure at the time of imaging,
+so the imaged wall is not stress-free; treated as if it were, the first part
+of a run inflates it well beyond the imaged shape (h08 by up to 3.1 mm at 10
+mmHg). Every run case therefore carries a solid-only `prestress/` case, from
+`template/templatePrestress`, adapted from the solids4foam
+`pulmonaryArteries` tutorial. The run case's `Allrun` runs it before the
+fluid-solid interaction run:
+
+1. `prestress/Allrun` applies the imaging pressure to `innerWall` and repeats
+   `solids4Foam` (a steady-state solve) and `updatePrestress`, which composes
+   the run's deformation gradient into the prestress, `Fpre <- F & Fpre`, and
+   resets the wall to the imaged shape. Pass 1 runs with `prestress no` and
+   ramps the pressure up; later passes run with `prestress yes` at full
+   pressure. It takes the wall material and solid mesh from the run case each
+   time, so `Fpre` always matches what the fluid-solid interaction run solves.
+2. Passes stop once the wall moves less than `--prestress-tolerance-fraction`
+   (default 0.1) times the thinnest wall, or after `--prestress-max-passes`
+   (default 30). If the tolerance is not met, the latest `Fpre` is still used
+   and `prestress/PRESTRESS_NOT_CONVERGED` is written. Each pass is logged in
+   `prestress/prestressHistory`.
+3. The final `Fpre` is copied to `0/solid/Fpre`, and the fluid-solid
+   interaction run uses it (`prestress yes` in
+   `constant/solid/mechanicalProperties`).
+
+The imaging pressure comes from `--prestress-pressure` in mmHg (default
+10 mmHg, from the species file). The fluid-solid interaction run starts from
+it too: `0/fluid/p` and every Windkessel outlet are initialised to it, so the
+prestressed wall starts in equilibrium. On h08 the prestress converged in 27
+passes (8.8 minutes on 16 cores), the residual displacement falling by about
+13% per pass to 0.03 mm. `--no-prestress` leaves `prestress/` out and sets
+`prestress no`; the run then still starts at the imaging pressure.
 
 ### Mesh units
 

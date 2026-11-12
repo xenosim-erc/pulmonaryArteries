@@ -35,9 +35,26 @@ then
     fi
 fi
 
+### Prestress
+# prestress/ computes the prestress Fpre of the imaged wall under the imaging
+# pressure and copies it to 0/solid/Fpre; constant/solid/mechanicalProperties
+# then has "prestress yes;". meshing.sh leaves prestress/ out, and sets
+# "prestress no;", when the case is made with --no-prestress.
+if [ -d prestress ]
+then
+    (cd prestress && ./Allrun parallel)
+    if [ ! -f 0/solid/Fpre ]
+    then
+        echo "0/solid/Fpre missing: prestress/Allrun did not write it." >&2
+        exit 1
+    fi
+fi
+
 ### Decompose case
+# The solid fields are decomposed rather than copied with -copyZero, which
+# only suits uniform fields: Fpre differs from cell to cell
 solids4Foam::runApplication -s fluid decomposePar -region fluid -copyZero
-solids4Foam::runApplication -s solid decomposePar -region solid -copyZero
+solids4Foam::runApplication -s solid decomposePar -region solid -force
 
 ### Run solver
 solids4Foam::runParallel solids4Foam

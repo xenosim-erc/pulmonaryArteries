@@ -18,6 +18,10 @@ FoamFile
 
 planeStress     no;
 
+// Evaluate the wall law relative to the prestressed (stress-free) state given
+// by 0/solid/Fpre, computed by prestress/. meshing.sh sets this.
+prestress       no;
+
 mechanical
 ( 
      pipe
