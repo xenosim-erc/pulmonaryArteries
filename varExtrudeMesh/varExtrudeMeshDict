@@ -23,10 +23,18 @@ distanceField       WallThickness;
 // Fluid boundary normals normally point outward into the arterial wall.
 flipNormals         false;
 
-// Optional: smooth the extrusion normals over the patch before extruding.
-// Each pass replaces a normal by the normalised sum of itself and its edge
-// neighbours. 0 (the default) uses the raw patch point normals. Serial only.
+// Optional: smooth the extrusion normals before extruding (see README).
+// Uniform passes over the whole patch; 0 (the default) uses none.
 nNormalSmoothingIterations 0;
+
+// Adaptive smoothing: only around the faces that would fold, widening the
+// region until none would. Serial only. Off by default.
+adaptiveNormalSmoothing no;
+adaptiveFoldMargin  0.25;
+adaptiveInitialRings 2;
+adaptiveRingGrowthInterval 10;
+adaptiveMaxRings    40;
+adaptiveMaxIterations 300;
 
 // With smoothing on, no normal may end up more than this many degrees from
 // its original patch normal (default 45).

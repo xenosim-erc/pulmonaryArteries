@@ -92,24 +92,35 @@ creases and refinement transitions, so the wall's concave radius there is
 smaller than the STL's (a median of 0.39 mm against 0.61 mm at the fold
 sites) and saddle smoothing of the STL cannot reach it.
 
-The template therefore sets `nNormalSmoothingIterations 20` in
-`varExtrudeMeshDict`. Each pass replaces every point's normal with the
-normalised sum of itself and its edge neighbours, which spreads a sharp change
-of direction over more points so neighbouring normals no longer cross. The
-fluid wall itself (layer 0, the interface) is not moved. `maxNormalTilt 45`
-stops any normal turning more than 45 degrees from the wall normal: where a
-scan folds back on itself, averaging could otherwise turn a normal right round
-and extrude the wall into the fluid. On the 94 test geometries this took the
-clean solids from 31 to 62 and the negative-volume cells from 420 to 69, with
-an average tilt of about 3 degrees. The remaining failures are mostly scans
-with folded-back patches, which need repairing.
+The template therefore turns on adaptive smoothing of the extrusion normals
+in `varExtrudeMeshDict` (`adaptiveNormalSmoothing yes`). `varExtrudeMesh`
+extrudes the wall in memory, finds the faces whose outer face would turn over
+or shrink below a quarter of the inner face, and smooths the normals only
+around them: each round replaces a normal with the normalised sum of itself
+and its edge neighbours, over a region two rings wide that widens by a ring
+every 10 rounds, until no face is flagged (at most 300 rounds). The rest of
+the wall keeps exactly the normals the patch gives it, and the fluid wall
+itself (layer 0, the interface) is never moved. `maxNormalTilt 45` stops any
+normal turning more than 45 degrees from the wall normal: where a scan folds
+back on itself, averaging could otherwise turn a normal right round and
+extrude the wall into the fluid.
 
-The number of passes scales with the wall thickness: 20 at the reference
-extrusion of 5%, and `20 x (extrusion / 5)^2` above it, so 80 at 10%. A wall
-folds wherever it is thicker than the local concave radius, so a thicker wall
-needs the change of direction spread over a wider region, and a smoothing
-reaches a distance that grows with the square root of its passes. Below 5% the
-reference value is kept. `--normal-smoothing-passes` sets it directly.
+Because it keeps going until nothing would fold, it adapts to the wall
+thickness by itself. On the 94 test geometries:
+
+| Extrusion | Extrusion normals | Clean solids | Negative-volume cells |
+| --- | --- | --- | --- |
+| 5% | none | 31 | 420 |
+| 5% | 20 uniform passes | 62 | 69 |
+| 5% | adaptive | 68 | 67 |
+| 10% | 80 uniform passes | 34 | 722 |
+| 10% | adaptive | 44 | 249 |
+
+At 5% it touched 0.9% of the wall on average, with a mean tilt of 0.08
+degrees, against every normal tilted by about 3 degrees with uniform
+smoothing. Uniform passes can still be added before it with
+`--normal-smoothing-passes` (`nNormalSmoothingIterations`). The remaining
+failures are mostly scans with folded-back patches, which need repairing.
 
 ### Solid mesh check
 

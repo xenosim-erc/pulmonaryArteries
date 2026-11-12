@@ -26,11 +26,22 @@ flipNormals         false;
 // Smooth the extrusion directions before extruding. Each point is extruded
 // along its own normal, so wherever the wall is concave on the outside with a
 // radius below the local thickness, neighbouring normals cross and cells fold
-// inside out. Across 94 test geometries, 20 passes took the clean solids from
-// 31 to 62 and the negative-volume cells from 420 to 69. maxNormalTilt stops
-// any normal turning more than 45 degrees from the wall normal (folded-back
-// patches in a scan can otherwise turn it right round).
-nNormalSmoothingIterations 20;
+// inside out. Adaptive smoothing finds the faces that would fold and smooths
+// the normals only around them, widening the region until none would; the
+// rest of the wall keeps its own normals. It adapts to the thickness by
+// itself. Across 94 test geometries (fold model) it matched 20 uniform passes
+// at 5% extrusion while touching 1% of the wall, and at 10% cut the
+// geometries that would fold from 27 to 8 against 80 uniform passes.
+// nNormalSmoothingIterations adds uniform passes first (meshing.sh:
+// --normal-smoothing-passes). maxNormalTilt stops any normal turning more
+// than 45 degrees from the wall normal.
+nNormalSmoothingIterations 0;
+adaptiveNormalSmoothing yes;
+adaptiveFoldMargin  0.25;   // flag faces whose outer face shrinks below this
+adaptiveInitialRings 2;     // smoothed region around them, in point rings
+adaptiveRingGrowthInterval 10;  // widen it by a ring every so many rounds
+adaptiveMaxRings    40;
+adaptiveMaxIterations 300;
 maxNormalTilt       45;
 
 // The private utility uses this model for nLayers and sumThickness(), but

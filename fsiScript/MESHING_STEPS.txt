@@ -95,9 +95,9 @@ SOLID MESH
 ----------
 32. Extrude the solid wall             varExtrudeMesh offsets the fluid wall along its point
                                        normals by the mapped thickness, in 3 layers. The
-                                       normals are first smoothed (20 passes at 5% extrusion,
-                                       scaling with its square above that), each turned at
-                                       most 45 degrees from the wall normal.
+                                       normals are first smoothed adaptively, only around the
+                                       faces that would fold, until none would; each is turned
+                                       at most 45 degrees from the wall normal.
 33. Drop the temporary fluid patch      createPatch removes the now-unneeded zero-face patch.
 34. Name the solid walls                Exposed face becomes 'innerWall' (conformal with the
                                         fluid wall), the extruded face 'outerWall'.

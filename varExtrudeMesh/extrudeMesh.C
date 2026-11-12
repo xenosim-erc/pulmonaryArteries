@@ -475,102 +475,6 @@ int main(int argc, char *argv[])
             PatchTools::pointNormals(mesh, extrudePatch, faceFlips)
         );
 
-        // Optionally smooth the extrusion directions over the patch.  Each
-        // point is moved along its own normal, so wherever the patch is
-        // concave on the extrusion side with a radius below the local
-        // distance, neighbouring normals cross and the extruded cells fold
-        // inside out.  On a faceted boundary mesh the point normals are far
-        // noisier than the underlying geometry, especially at creases and
-        // refinement transitions.  Each pass replaces every normal by the
-        // normalised sum of itself and its edge neighbours, which spreads
-        // the change of direction over more points and removes the local
-        // crossings, while leaving the layer-0 points (the conformal
-        // interface) untouched.  Serial only: in parallel the processor
-        // boundaries would not be synchronised.
-        const label nNormalSmoothing
-        (
-            dict.getOrDefault<label>("nNormalSmoothingIterations", 0)
-        );
-        if (nNormalSmoothing > 0)
-        {
-            if (Pstream::parRun())
-            {
-                FatalErrorInFunction
-                    << "nNormalSmoothingIterations is only supported in serial"
-                    << exit(FatalError);
-            }
-
-            const pointField originalNormals(extrudePatchPointNormals);
-            const edgeList& patchEdges = extrudePatch.edges();
-
-            for (label iter = 0; iter < nNormalSmoothing; ++iter)
-            {
-                pointField summed(extrudePatchPointNormals);
-                forAll(patchEdges, edgei)
-                {
-                    const edge& e = patchEdges[edgei];
-                    summed[e.first()] += extrudePatchPointNormals[e.second()];
-                    summed[e.second()] += extrudePatchPointNormals[e.first()];
-                }
-                extrudePatchPointNormals = summed/(mag(summed) + VSMALL);
-            }
-
-            // Limit how far smoothing may turn a normal away from the patch
-            // normal.  Where the patch itself folds back (a crease of nearly
-            // 180 degrees in the source surface), averaging can turn a normal
-            // right round, so that point would be extruded back into the
-            // source domain; and a strongly tilted extrusion shears its cells
-            // and thins the wall by the cosine of the tilt.  Normals beyond
-            // the limit are rotated back onto it, towards the patch normal.
-            const scalar maxTilt
-            (
-                dict.getOrDefault<scalar>("maxNormalTilt", 45)
-            );
-            const scalar cosMax = Foam::cos(degToRad(maxTilt));
-            const scalar sinMax = Foam::sin(degToRad(maxTilt));
-            label nLimited = 0;
-            forAll(extrudePatchPointNormals, pointi)
-            {
-                vector& n = extrudePatchPointNormals[pointi];
-                const vector& n0 = originalNormals[pointi];
-                const scalar c = n & n0;
-                if (c < cosMax)
-                {
-                    const vector perp(n - c*n0);
-                    const scalar magPerp = mag(perp);
-                    n = (magPerp > VSMALL) ? cosMax*n0 + sinMax*perp/magPerp : n0;
-                    ++nLimited;
-                }
-            }
-            Info<< "Limited " << nLimited << " smoothed normals to "
-                << maxTilt << " deg from the patch normal" << endl;
-
-            const scalarField tilt
-            (
-                radToDeg
-                (
-                    acos
-                    (
-                        min
-                        (
-                            scalar(1),
-                            max
-                            (
-                                scalar(-1),
-                                extrudePatchPointNormals & originalNormals
-                            )
-                        )
-                    )
-                )
-            );
-            Info<< "Smoothed the extrusion normals with " << nNormalSmoothing
-                << " passes" << nl
-                << "    average tilt from the patch normal: "
-                << gAverage(tilt) << " deg" << nl
-                << "    maximum tilt from the patch normal: "
-                << gMax(tilt) << " deg" << nl << endl;
-        }
-
         // Read the requested total extrusion distance at every point of the
         // source volume mesh.  The field name is selected in
         // varExtrudeMeshDict, for example "distanceField WallThickness;".
@@ -626,6 +530,277 @@ int main(int argc, char *argv[])
             << nl << "    maximum distance: " << gMax(patchDistance)
             << nl << "    average distance: " << gAverage(patchDistance)
             << nl << endl;
+
+        // Optionally smooth the extrusion directions over the patch.  Each
+        // point is moved along its own normal, so wherever the patch is
+        // concave on the extrusion side with a radius below the local
+        // distance, neighbouring normals cross and the extruded cells fold
+        // inside out.  A smoothing pass replaces every normal by the
+        // normalised sum of itself and its edge neighbours, which spreads a
+        // change of direction over more points.  Layer 0 (the source patch,
+        // the conformal interface) is never moved.  Serial only: in parallel
+        // the processor boundaries would not be synchronised.
+        //
+        // Two kinds can be combined, uniform first:
+        //   nNormalSmoothingIterations N   N passes over the whole patch;
+        //   adaptiveNormalSmoothing yes    passes only around the faces that
+        //       would fold, repeated until none would.  Each round flags the
+        //       faces whose extruded outer face has turned over or shrunk
+        //       below adaptiveFoldMargin of the inner face, smooths the
+        //       normals of their points and of a region adaptiveInitialRings
+        //       rings wide around them, and widens that region by one ring
+        //       every adaptiveRingGrowthInterval rounds (up to
+        //       adaptiveMaxRings), because a smoothed region with fixed
+        //       edges settles before it can turn its normals far enough.  It
+        //       stops when nothing is flagged or after
+        //       adaptiveMaxIterations rounds.  Normals away from the folds
+        //       are left exactly as the patch gives them.
+        // No normal may end up more than maxNormalTilt degrees from its
+        // original patch normal: where the source surface folds back on
+        // itself, averaging could otherwise turn a normal right round.
+        const label nNormalSmoothing
+        (
+            dict.getOrDefault<label>("nNormalSmoothingIterations", 0)
+        );
+        const bool adaptiveSmoothing
+        (
+            dict.getOrDefault<bool>("adaptiveNormalSmoothing", false)
+        );
+        if (nNormalSmoothing > 0 || adaptiveSmoothing)
+        {
+            if (Pstream::parRun())
+            {
+                FatalErrorInFunction
+                    << "Extrusion-normal smoothing is only supported in serial"
+                    << exit(FatalError);
+            }
+
+            pointField& normals = extrudePatchPointNormals;
+            const pointField originalNormals(normals);
+            const edgeList& patchEdges = extrudePatch.edges();
+            const scalar maxTilt
+            (
+                dict.getOrDefault<scalar>("maxNormalTilt", 45)
+            );
+            const scalar cosMax = Foam::cos(degToRad(maxTilt));
+            const scalar sinMax = Foam::sin(degToRad(maxTilt));
+
+            // One smoothing pass, over every point or only those in region
+            auto smoothPass = [&](const boolList* region)
+            {
+                pointField summed(normals);
+                forAll(patchEdges, edgei)
+                {
+                    const edge& e = patchEdges[edgei];
+                    summed[e.first()] += normals[e.second()];
+                    summed[e.second()] += normals[e.first()];
+                }
+                forAll(normals, pointi)
+                {
+                    if (!region || (*region)[pointi])
+                    {
+                        normals[pointi] =
+                            summed[pointi]/(mag(summed[pointi]) + VSMALL);
+                    }
+                }
+            };
+
+            // Rotate any normal beyond maxTilt back onto it
+            label nLimited = 0;
+            auto limitTilt = [&]()
+            {
+                forAll(normals, pointi)
+                {
+                    vector& n = normals[pointi];
+                    const vector& n0 = originalNormals[pointi];
+                    const scalar c = n & n0;
+                    if (c < cosMax)
+                    {
+                        const vector perp(n - c*n0);
+                        const scalar magPerp = mag(perp);
+                        n = (magPerp > VSMALL)
+                          ? cosMax*n0 + sinMax*perp/magPerp
+                          : n0;
+                        ++nLimited;
+                    }
+                }
+            };
+
+            for (label iter = 0; iter < nNormalSmoothing; ++iter)
+            {
+                smoothPass(nullptr);
+            }
+            limitTilt();
+            if (nNormalSmoothing > 0)
+            {
+                Info<< "Smoothed the extrusion normals uniformly with "
+                    << nNormalSmoothing << " passes" << endl;
+            }
+
+            if (adaptiveSmoothing)
+            {
+                const scalar foldMargin
+                (
+                    dict.getOrDefault<scalar>("adaptiveFoldMargin", 0.25)
+                );
+                const label initialRings
+                (
+                    dict.getOrDefault<label>("adaptiveInitialRings", 2)
+                );
+                const label growthInterval
+                (
+                    dict.getOrDefault<label>("adaptiveRingGrowthInterval", 10)
+                );
+                const label maxRings
+                (
+                    dict.getOrDefault<label>("adaptiveMaxRings", 40)
+                );
+                const label maxIterations
+                (
+                    dict.getOrDefault<label>("adaptiveMaxIterations", 300)
+                );
+
+                const pointField& X = extrudePatch.localPoints();
+                const faceList& patchFaces = extrudePatch.localFaces();
+                vectorField innerArea(patchFaces.size());
+                forAll(patchFaces, facei)
+                {
+                    innerArea[facei] = patchFaces[facei].areaNormal(X);
+                }
+
+                // Outer-face area over inner-face area, along the inner
+                // normal: 1 for a flat translation, <= 0 once it turns over
+                auto foldRatios = [&]()
+                {
+                    const pointField outerPoints(X + patchDistance*normals);
+                    scalarField ratio(patchFaces.size());
+                    forAll(patchFaces, facei)
+                    {
+                        const vector outer =
+                            patchFaces[facei].areaNormal(outerPoints);
+                        ratio[facei] =
+                            (outer & innerArea[facei])
+                           /(magSqr(innerArea[facei]) + VSMALL);
+                    }
+                    return ratio;
+                };
+
+                label nFlippedBefore = 0;
+                {
+                    const scalarField ratio(foldRatios());
+                    forAll(ratio, facei)
+                    {
+                        if (ratio[facei] <= 0) ++nFlippedBefore;
+                    }
+                }
+
+                boolList touched(X.size(), false);
+                label nFlagged = 0;
+                label iteration = 0;
+                for (iteration = 1; iteration <= maxIterations; ++iteration)
+                {
+                    const scalarField ratio(foldRatios());
+                    boolList region(X.size(), false);
+                    nFlagged = 0;
+                    forAll(patchFaces, facei)
+                    {
+                        if (ratio[facei] < foldMargin)
+                        {
+                            ++nFlagged;
+                            for (const label pointi : patchFaces[facei])
+                            {
+                                region[pointi] = true;
+                            }
+                        }
+                    }
+                    if (nFlagged == 0)
+                    {
+                        --iteration;
+                        break;
+                    }
+
+                    const label width = min
+                    (
+                        initialRings
+                      + (growthInterval > 0 ? iteration/growthInterval : 0),
+                        maxRings
+                    );
+                    for (label ring = 0; ring < width; ++ring)
+                    {
+                        boolList grown(region);
+                        forAll(patchEdges, edgei)
+                        {
+                            const edge& e = patchEdges[edgei];
+                            if (region[e.first()] || region[e.second()])
+                            {
+                                grown[e.first()] = true;
+                                grown[e.second()] = true;
+                            }
+                        }
+                        region.transfer(grown);
+                    }
+                    forAll(region, pointi)
+                    {
+                        if (region[pointi])
+                        {
+                            touched[pointi] = true;
+                        }
+                    }
+
+                    smoothPass(&region);
+                    limitTilt();
+                }
+                iteration = min(iteration, maxIterations);
+
+                const scalarField finalRatio(foldRatios());
+                label nFlipped = 0;
+                label nBelowMargin = 0;
+                forAll(finalRatio, facei)
+                {
+                    if (finalRatio[facei] <= 0) ++nFlipped;
+                    if (finalRatio[facei] < foldMargin) ++nBelowMargin;
+                }
+                label nTouched = 0;
+                forAll(touched, pointi)
+                {
+                    if (touched[pointi]) ++nTouched;
+                }
+
+                Info<< "Adaptive extrusion-normal smoothing" << nl
+                    << "    faces that would turn over before: "
+                    << nFlippedBefore << nl
+                    << "    rounds: " << iteration
+                    << (nBelowMargin ? " (stopped at the limit)" : "") << nl
+                    << "    faces that would turn over after: " << nFlipped
+                    << nl
+                    << "    faces still below the fold margin "
+                    << foldMargin << ": " << nBelowMargin << nl
+                    << "    points whose normal was smoothed: " << nTouched
+                    << " of " << X.size() << nl << endl;
+            }
+
+            const scalarField tilt
+            (
+                radToDeg
+                (
+                    acos
+                    (
+                        min
+                        (
+                            scalar(1),
+                            max(scalar(-1), normals & originalNormals)
+                        )
+                    )
+                )
+            );
+            Info<< "Extrusion normals after smoothing" << nl
+                << "    normals limited to " << maxTilt << " deg: "
+                << nLimited << nl
+                << "    average tilt from the patch normal: "
+                << gAverage(tilt) << " deg" << nl
+                << "    maximum tilt from the patch normal: "
+                << gMax(tilt) << " deg" << nl << endl;
+        }
 
 
         // Precalculate mesh edges for pp.edges.

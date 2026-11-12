@@ -543,21 +543,23 @@ fi
 echo "Gaussian smoothing sigma: $gaussian_sigma"
 echo "Extrusion percentage: $extrusion_percentage%"
 
-# Smoothing that scales with the wall thickness. A wall folds wherever it is
-# thicker than the local concave radius, so a thicker wall needs the rounding
-# spread over a proportionally wider region. 5% is the reference, tested on 94
-# geometries: 20 extrusion-normal passes, saddle region grown by 3 rings over
-# 20 passes. The region a smoothing reaches grows with the square root of its
-# passes, so passes scale with the square of the ratio and the saddle region
-# width with the ratio itself. Below 5% the reference values are kept, so a
-# thinner wall is never smoothed less than the tested case. Each can be set
-# explicitly instead.
+# Saddle smoothing that scales with the wall thickness. A wall folds wherever
+# it is thicker than the local concave radius, so a thicker wall needs the
+# rounding spread over a proportionally wider region. 5% is the reference,
+# tested on 94 geometries: saddle region grown by 3 rings over 20 passes. The
+# region a smoothing reaches grows with the square root of its passes, so the
+# passes scale with the square of the ratio and the region width with the
+# ratio itself. Below 5% the reference values are kept, so a thinner wall is
+# never smoothed less than the tested case. Each can be set explicitly
+# instead. The extrusion normals are smoothed adaptively by varExtrudeMesh,
+# which adapts to the thickness by itself; --normal-smoothing-passes adds
+# uniform passes before it (default 0).
 smoothing_ratio="$(awk -v e="$extrusion_percentage" 'BEGIN { r = e / 5.0; if (r < 1) r = 1; printf "%.6g", r }')"
 scaled_count() {
     awk -v base="$1" -v r="$smoothing_ratio" -v power="$2" \
         'BEGIN { printf "%d", int(base * r ^ power + 0.5) }'
 }
-normal_smoothing_passes="${normal_smoothing_passes:-$(scaled_count 20 2)}"
+normal_smoothing_passes="${normal_smoothing_passes:-0}"
 saddle_dilation="${saddle_dilation:-$(scaled_count 3 1)}"
 saddle_iterations="${saddle_iterations:-$(scaled_count 20 2)}"
 for count_name in normal_smoothing_passes saddle_dilation saddle_iterations; do
@@ -566,7 +568,7 @@ for count_name in normal_smoothing_passes saddle_dilation saddle_iterations; do
         exit 2
     fi
 done
-echo "Smoothing: $normal_smoothing_passes extrusion-normal passes; saddle region $saddle_dilation rings, $saddle_iterations passes"
+echo "Smoothing: adaptive extrusion normals (+$normal_smoothing_passes uniform passes); saddle region $saddle_dilation rings, $saddle_iterations passes"
 
 # The two formulations need different interface conditions, so each has its own
 # case template. Robin cases are named with a Robin suffix so both can be
@@ -849,7 +851,7 @@ print_settings() {
         "Extrusion percentage:" "$extrusion_percentage" \
         "Thickness smoothing passes:" "$thickness_smoothing_passes" \
         "Saddle smoothing:" "$saddle_dilation rings, $saddle_iterations passes" \
-        "Extrusion-normal smoothing:" "$normal_smoothing_passes passes" \
+        "Extrusion-normal smoothing:" "adaptive, after $normal_smoothing_passes uniform passes" \
         "Cells per radius:" "$cells_per_radius" \
         "Sphere radius factor:" "$sphere_radius_factor" \
         "Max refinement levels:" "$maximum_refinement_levels" \
@@ -1385,8 +1387,8 @@ Things to try, in roughly this order:
      offset less likely to fold.
   3. Wider saddle smoothing: --saddle-dilation 8 --saddle-iterations 50.
      It rounds dents and creases more but moves more of the surface.
-  4. More nNormalSmoothingIterations in template/templateMesh/
-     varExtrudeFunc/system/varExtrudeMeshDict.
+  4. Uniform extrusion-normal passes before the adaptive smoothing:
+     --normal-smoothing-passes 20.
 If the bad cells sit on a fold where the scan doubles back on itself,
 only repairing the STL will fix them.
 ########################################################################

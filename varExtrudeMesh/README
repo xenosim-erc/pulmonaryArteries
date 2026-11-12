@@ -42,18 +42,34 @@ concave on the extrusion side with a radius smaller than the local distance,
 neighbouring normals cross and the extruded cells fold inside out. On a faceted
 boundary mesh the point normals are noisier than the geometry they describe.
 
-Two optional dictionary entries smooth them before extruding:
+Optional dictionary entries smooth them before extruding. A pass replaces a
+normal by the normalised sum of itself and its edge neighbours. There are two
+kinds, which can be combined (uniform first):
 
 ```foam
-nNormalSmoothingIterations 20;   // default 0: raw patch point normals
-maxNormalTilt       45;          // degrees, default 45
+nNormalSmoothingIterations 0;      // uniform passes over the whole patch
+adaptiveNormalSmoothing    yes;    // default no
+adaptiveFoldMargin         0.25;   // flag faces whose outer face shrinks below this
+adaptiveInitialRings       2;      // smoothed region around them, in point rings
+adaptiveRingGrowthInterval 10;     // widen it by a ring every so many rounds
+adaptiveMaxRings           40;
+adaptiveMaxIterations      300;
+maxNormalTilt              45;     // degrees, default 45
 ```
 
-Each pass replaces every normal by the normalised sum of itself and its edge
-neighbours. Afterwards no normal may be more than `maxNormalTilt` degrees from
-its original patch normal; any that are get rotated back onto that limit. Layer
-0 (the source patch) is never moved, so the interface stays conformal. The
-utility prints the average and maximum tilt. Smoothing is serial only.
+Adaptive smoothing extrudes the patch in memory, flags the faces whose outer
+face would turn over or shrink below `adaptiveFoldMargin` of the inner face,
+and smooths only the normals of their points and of a region around them. The
+region widens every `adaptiveRingGrowthInterval` rounds, because a smoothed
+region with fixed edges settles before it can turn its normals far enough. It
+stops when no face is flagged, or after `adaptiveMaxIterations` rounds;
+normals away from the folds are left exactly as the patch gives them.
+
+No normal may end up more than `maxNormalTilt` degrees from its original patch
+normal; any that would are rotated back onto that limit. Layer 0 (the source
+patch) is never moved, so the interface stays conformal. The utility reports
+the faces that would turn over before and after, the points smoothed and the
+average and maximum tilt. Smoothing is serial only.
 
 ## Building
 
