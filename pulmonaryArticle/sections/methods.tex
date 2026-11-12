@@ -34,6 +34,20 @@
 \subsection{Prestress}\label{sec:prestress}
 % Imaged geometry is loaded at imaging pressure (10 mmHg): MULF passes until
 % max|D| < 0.1 x min wall thickness; resulting F_pre initialises the FSI run.
+The images of the pulmonary geometries are taken while the artery walls are already loaded and stretched by the pulmonary arterial pressure.
+Assuming this, herein named the reference geometry, to be the zero-pressure geometry would lead to an over-inflation of the arteries when loaded by the flow.
+This is taken into account using a methodology based on the MULF prestressing of Gee et al. \note{reference}
+
+An internal load of \SI{10}{mmHg} is applied to the internal surface of the solid mesh in the reference configuration to obtain a deformed geometry.
+The deformation gradient tensor and, by extension, the state of stress of the deformed geometry are then be applied to the reference configuration.
+This will in general not be in equilibrium if \SI{10}{mmHg} is applied due to the difference in configuration.
+Hence, further passes are run with the deformation gradient updated according to \note{equation}.
+
+\begin{equation}
+  \vect{F_{\mathrm{pre}}} = \vect{F_{t+1}} \vect{F_{\mathrm{pre}}}
+  \label{eq:MULF}
+\end
+
 \todo{Prestress}
 
 \subsection{Fluid--solid coupling and numerics}\label{sec:fsi}
