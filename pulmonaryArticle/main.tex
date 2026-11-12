@@ -1,0 +1,56 @@
+% Porcine vs human pulmonary haemodynamics: FSI comparison
+% Build: latexmk   (config in latexmkrc; output goes to build/)
+\documentclass[preprint,12pt,authoryear]{elsarticle}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[separate-uncertainty=true,per-mode=symbol]{siunitx}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{hyperref}
+\usepackage[capitalise,noabbrev]{cleveref}
+\usepackage{lineno}
+
+\graphicspath{{figures/}}
+\input{macros}
+
+\journal{TBD}
+
+\begin{document}
+
+\begin{frontmatter}
+\title{Fluid--structure interaction of porcine and human pulmonary arteries: a comparative haemodynamic study}
+
+\author[ucd]{Conor Moore}
+% \author[ucd]{...}
+\affiliation[ucd]{organization={University College Dublin},
+  city={Dublin}, country={Ireland}}
+
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\begin{keyword}
+pulmonary artery \sep fluid--structure interaction \sep porcine model \sep
+haemodynamics \sep pulmonary arterial hypertension \sep solids4foam
+\end{keyword}
+\end{frontmatter}
+
+\linenumbers
+
+\input{sections/introduction}
+\input{sections/methods}
+\input{sections/results}
+\input{sections/discussion}
+\input{sections/conclusions}
+
+\section*{Acknowledgements}
+% Funding: XenoSim ERC grant number ...
+
+\bibliographystyle{elsarticle-harv}
+\bibliography{references}
+
+\appendix
+\input{sections/appendix}
+
+\end{document}

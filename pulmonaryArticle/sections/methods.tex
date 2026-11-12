@@ -1,0 +1,48 @@
+\section{Methods}\label{sec:methods}
+
+\subsection{Image data and cohort}\label{sec:cohort}
+% Source of the 50 human and 44 porcine segmentations (fsiScript/geometries),
+% imaging modality, ethics, inclusion/exclusion (e.g. solids failing checkMesh).
+\todo{Cohort description and ethics}
+
+\subsection{Geometry preparation}\label{sec:geometry}
+% Taubin windowed-sinc smoothing (rims fixed); VMTK centerlines;
+% saddle rounding with target radius = local wall thickness / safety factor;
+% flow extensions off by default; capping on original rims.
+\todo{Surface preparation}
+
+\subsection{Wall thickness and mesh generation}\label{sec:mesh}
+% Thickness = 5% (?) of smoothed centreline diameter, Gaussian-smoothed over the
+% surface graph. cfMesh fluid mesh, maxCellSize 0.8 mm, cells-per-radius
+% refinement; solid by varExtrudeMesh along adaptively smoothed normals;
+% conformal interface; checkMesh acceptance.
+\todo{Meshing; mesh-independence study in appendix}
+
+\subsection{Governing equations and constitutive models}\label{sec:models}
+% Fluid: incompressible, laminar, Bird--Carreau blood (rho = 1060, nu0 = 1.51e-4,
+%   nuInf = 3.3e-6, k = 8.2, n = 0.2128, a = 0.64) on an ALE mesh.
+% Solid: neo-Hookean, rho_s = 1200, E = 300 kPa, nu = 0.45 (human);
+%   porcine values still placeholders in template/species/porcine.
+\todo{Equations}
+
+\subsection{Boundary conditions}\label{sec:bcs}
+% Inlet: species-specific flow waveforms (humanFlow / pigFlow).
+% Outlets: three-element Windkessel, totals split by outlet area.
+% Solid: ends pinned; outer wall traction-free (or external tissue support?).
+\todo{Boundary conditions and parameter table}
+
+\subsection{Prestress}\label{sec:prestress}
+% Imaged geometry is loaded at imaging pressure (10 mmHg): MULF passes until
+% max|D| < 0.1 x min wall thickness; resulting F_pre initialises the FSI run.
+\todo{Prestress}
+
+\subsection{Fluid--solid coupling and numerics}\label{sec:fsi}
+% solids4foam, finite-volume; partitioned Robin--Neumann coupling;
+% time step, number of cardiac cycles, periodicity criterion, cores/runtime.
+\todo{Numerics}
+
+\subsection{Haemodynamic metrics and statistics}\label{sec:metrics}
+% TAWSS, OSI, RRT, pressure/flow splits, pulse wave velocity, distensibility,
+% Re and Womersley numbers; non-dimensionalisation for cross-species comparison
+% (allometric/body-mass scaling); statistical tests between groups.
+\todo{Metrics and statistics}
