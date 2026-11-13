@@ -5,18 +5,15 @@
 % imaging modality, ethics, inclusion/exclusion (e.g. solids failing checkMesh).
 \todo{Cohort description and ethics}
 
-\subsection{Geometry preparation}\label{sec:geometry}
+\subsection{Model reconstruction}\label{sec:Meshing}
 % Taubin windowed-sinc smoothing (rims fixed); VMTK centerlines;
 % saddle rounding with target radius = local wall thickness / safety factor;
 % flow extensions off by default; capping on original rims.
-\todo{Surface preparation}
-
-\subsection{Wall thickness and mesh generation}\label{sec:mesh}
 % Thickness = 5% (?) of smoothed centreline diameter, Gaussian-smoothed over the
 % surface graph. cfMesh fluid mesh, maxCellSize 0.8 mm, cells-per-radius
 % refinement; solid by varExtrudeMesh along adaptively smoothed normals;
 % conformal interface; checkMesh acceptance.
-\todo{Meshing; mesh-independence study in appendix}
+\todo{Geometry preparation; meshing; mesh-independence study in appendix}
 
 \subsection{Governing equations and constitutive models}\label{sec:models}
 % Fluid: incompressible, laminar, Bird--Carreau blood (rho = 1060, nu0 = 1.51e-4,
@@ -35,20 +32,20 @@
 % Imaged geometry is loaded at imaging pressure (10 mmHg): MULF passes until
 % max|D| < 0.1 x min wall thickness; resulting F_pre initialises the FSI run.
 The images of the pulmonary geometries are taken while the artery walls are already loaded and stretched by the pulmonary arterial pressure.
-Assuming this, herein named the reference geometry, to be the zero-pressure geometry would lead to an over-inflation of the arteries when loaded by the flow.
+Assuming this, herein named the reference configuration, to be the zero-pressure geometry would lead to an over-inflation of the arteries when loaded by the flow.
 This is taken into account using a methodology based on the MULF prestressing of Gee et al. \note{reference}
 
 An internal load of \SI{10}{mmHg} is applied to the internal surface of the solid mesh in the reference configuration to obtain a deformed geometry.
-The deformation gradient tensor and, by extension, the state of stress of the deformed geometry are then be applied to the reference configuration.
-This will in general not be in equilibrium if \SI{10}{mmHg} is applied due to the difference in configuration.
-Hence, further passes are run with the deformation gradient updated according to \note{equation}.
+The deformation gradient tensor $\vect{F}$ and, by extension, the state of stress of the deformed geometry are then applied to the reference configuration.
+This will not, in general, be in equilibrium if \SI{10}{mmHg} is applied due to the difference in topology.
+Hence, further passes are run with the deformation gradient updated according to \cref{eq:MULF}.
 
 \begin{equation}
-  \vect{F_{\mathrm{pre}}} = \vect{F_{t+1}} \vect{F_{\mathrm{pre}}}
+  \vect{F_{\mathrm{pre_\mathrm{t+1}}}} = \vect{F_{t}} \vect{F_{\mathrm{pre_\mathrm{t}}}}
   \label{eq:MULF}
-\end
+\end{equation}
 
-\todo{Prestress}
+
 
 \subsection{Fluid--solid coupling and numerics}\label{sec:fsi}
 % solids4foam, finite-volume; partitioned Robin--Neumann coupling;
