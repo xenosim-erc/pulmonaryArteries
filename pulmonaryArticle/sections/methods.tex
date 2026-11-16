@@ -8,16 +8,18 @@ Every setting used for a case, together with the version of the workflow that pr
 % ---------------------------------------------------------------------------
 \subsection{Image data and cohort}\label{sec:cohort}
 
-Surface models of \todo{50} human and \todo{44} porcine pulmonary arterial trees were used. These geometries were obtained from \citep{yevtushenkoSimulationBasedComparisonHuman2025}.
+Surface models of \todo{50} human and \todo{44} porcine pulmonary arterial trees were taken from the cohort of \citet{yevtushenkoSimulationBasedComparisonHuman2025}.
 
-\todo{Imaging modality, resolution and phase of the cardiac cycle at acquisition; segmentation method and software; source of each cohort; ethical approval and animal licence numbers.}
-Porcine pulmonary artery geometries were reconstructed using electrocardiography-gated computed tomography (CT) scans retrospectively obtained from the ETH Zürich (Swiss Large White, weight 82.6 ± 18.8 kg).
+Porcine pulmonary artery geometries were reconstructed from electrocardiography-gated computed tomography (CT) scans of Swiss Large White pigs (body mass \SI{82.6 \pm 18.8}{\kilo\gram}), obtained retrospectively from ETH Zürich.
 These animal studies were approved by the local Committee for Experimental Animal Research (Cantonal Veterinary Office Zurich, Switzerland) under the approval numbers 152/2013, 219/2016 and 138/2017.
+\todo{Porcine CT scanner, resolution and cardiac phase at acquisition.}
 
-Human PA image data was obtained from routine transcatheter aortic-valve replacement (TAVI) planning.
-CT scans were performed with either an Aquilion One Vision (Canon Medical Systems, Tochigi, Japan) or a Revolution CT (GE Healthcare, Chicago, IL, USA) yielding an in-plane resolution of 0.39–0.648 mm x 0.39–0.648 mm and a slice thickness of 0.5–1 mm.
-Geometry reconstruction was performed using ZIBAmira (version 2015.28, Zuse Institute Berlin, Berlin, Germany) from images acquired during the diastole using semi-automatic segmentation approach.
-Further information on reconstruction procedure and inter-operator bias analysis can be found in a comparative study of pulmonary artery morphometry \citep{goubergrits2023ctbased}.
+Human pulmonary artery image data were obtained from routine CT planning for transcatheter aortic valve implantation (TAVI).
+Scans were performed with either an Aquilion One Vision (Canon Medical Systems, Tochigi, Japan) or a Revolution CT (GE Healthcare, Chicago, IL, USA), with an in-plane resolution of 0.39--\SI{0.648}{\milli\metre} and a slice thickness of 0.5--\SI{1}{\milli\metre}.
+Geometries were reconstructed in ZIBAmira (version 2015.28, Zuse Institute Berlin, Berlin, Germany) by semi-automatic segmentation of images acquired during diastole.
+\todo{Ethical approval for the use of the human data.}
+Further details of the reconstruction procedure, and an analysis of inter-operator bias, are given in a comparative study of pulmonary artery morphometry \citep{goubergrits2023ctbased}.
+\todo{Patients referred for TAVI frequently have raised pulmonary pressures, and the human main pulmonary arteries here (median centreline diameter \SI{27.9}{\milli\metre}) are wider than typical healthy values. State whether pressures were available and whether any subjects were excluded, and discuss this as a limitation.}
 
 \todo{Subject characteristics: age, sex, body mass, haemodynamic status (healthy vs PAH, if part of the study); a table of these per species.}
 
@@ -50,18 +52,21 @@ Every cap was labelled when it was created: the cap on the largest opening becam
 These labels were carried unchanged into the volume meshes, so each outlet keeps its own identity for the outlet boundary conditions of \cref{sec:bcs}.
 
 \paragraph{Wall thickness}
-Patient- and animal-specific wall thickness was not available from the images, so the wall thickness was prescribed as a fixed fraction of the local vessel diameter, following previous FSI simulations of pulmonary artery \citep{liu2022vascular}.
+Patient- and animal-specific wall thickness was not available from the images, so the wall thickness was prescribed as a fixed fraction of the local vessel diameter, a common assumption in FSI simulations of the pulmonary arteries \citep{liu2020fluid,humphrey2013cardiovascular},
 \begin{equation}
   h(\vect{x}) = \frac{\varepsilon}{100}\, \tilde{D}\big(\vect{x}\big),
   \label{eq:thickness}
 \end{equation}
 where $\varepsilon$ is the extrusion percentage and $\tilde{D}$ is the centreline diameter, smoothed along each branch with a Gaussian kernel ($\sigma = \SI{10}{\milli\metre}$) and assigned to each surface point from its nearest centreline point.
-$\varepsilon$ is assumed to be 8\% for both human and porcine models.
-There is significant variation in estimates of pulmonary artery wall thickness, however this figure is in line with ex-vivo measurements of human and porcine pulmonary arteries \citep{pillalamarriExVivoRegional2021,azadaniRegionalMechanicalProperties2012}.
-Additionally, the aorta is typically considered to have a mean wall-thickness of \SI{2}{\milli\metre} compared with a diameter of \SI{25}{\milli\metre} \citep{humphrey2013cardiovascular}.
-A sensitivity analysis to wall thickness was run on models with wall thicknesses of 5\% and 10\% with results in \todo{APPENDIX}
-
 Nearest-centreline assignment is discontinuous across bifurcations, so the mapped thickness was further smoothed over the surface (10 passes), which removes the steps without changing the mean thickness appreciably.
+
+The extrusion percentage was set to $\varepsilon = 8$ for both species.
+Estimates of pulmonary arterial wall thickness vary widely with the measurement method: for the human main pulmonary artery they range from \SI{0.43}{\milli\metre} on fixed histological sections \citep{mackay1978structural} to \SI{3.6}{\milli\metre} on transthoracic echocardiography \citep{agackiran2023pulmonary}.
+\textit{Ex vivo} measurements give a wall thickness of \SI{2.0}{\milli\metre} for the main pulmonary artery of pigs of similar body mass to the present cohort \citep{pillalamarriExVivoRegional2021} and \SI{1.45}{\milli\metre} for the human pulmonary root \citep{azadaniRegionalMechanicalProperties2012}.
+Relative to the median centreline diameter $\tilde{D}$ at the middle of the main pulmonary artery in the present cohorts, \SI{23.5}{\milli\metre} (porcine) and \SI{27.9}{\milli\metre} (human), these correspond to approximately 9\% and 5\%, respectively.
+For comparison, the wall of the aorta is approximately \SI{2}{\milli\metre} thick at a diameter of \SI{25}{\milli\metre}, or 8\% \citep{burton1954relation}.
+\todo{Justify a single value for both species given the approximately 9\% (porcine) and 5\% (human) above, or use species-specific values.}
+The sensitivity of the results to this choice was assessed by repeating \todo{N} simulations with $\varepsilon = 5$ and $\varepsilon = 10$ (\cref{app:thickness}).
 
 
 \paragraph{Fluid mesh}
@@ -130,7 +135,7 @@ The model parameters for each species are listed in \cref{tab:params}.
     Wall density, $\rho_s$             & \si{\kilo\gram\per\cubic\metre} & \todo{1200}         & \todo{1200} \\
     Young's modulus, $E$               & \si{\kilo\pascal}               & \todo{300}          & \todo{300} \\
     Poisson's ratio, $\nu_s$           & --                              & \todo{0.45}         & \todo{0.45} \\
-    Wall thickness, $\varepsilon$      & \% of diameter                  & \todo{5}            & \todo{5} \\
+    Wall thickness, $\varepsilon$      & \% of diameter                  & 8                   & 8 \\
     Proximal resistance, $R_p$         & \si{\pascal\second\per\cubic\metre} & \num{3.3e6}     & \todo{\num{3.3e6}} \\
     Distal resistance, $R_d$           & \si{\pascal\second\per\cubic\metre} & \num{2e7}       & \todo{\num{2e7}} \\
     Compliance, $C$                    & \si{\cubic\metre\per\pascal}    & \num{3.5e-8}        & \todo{\num{3.5e-8}} \\
