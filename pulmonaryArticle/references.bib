@@ -1,3 +1,20 @@
+@article{adame2006automatic,
+  title = {Automatic Vessel Wall Contour Detection and Quantification of Wall Thickness in In-Vivo {{MR}} Images of the Human Aorta},
+  author = {Adame, Isabel M. and {van der Geest}, Rob J. and Bluemke, David A. and Lima, Jo{\~a}o A. C. and Reiber, Johan H. C. and Lelieveldt, Boudewijn P. F.},
+  year = 2006,
+  month = sep,
+  journal = {Journal of magnetic resonance imaging: JMRI},
+  volume = {24},
+  number = {3},
+  pages = {595--602},
+  issn = {1053-1807},
+  doi = {10.1002/jmri.20662},
+  abstract = {PURPOSE: To develop an automated technique to trace the contours of the lumen and outer boundary of the aortic wall, and measure aortic wall thickness in axial MR images. MATERIALS AND METHODS: The algorithm uses prior knowledge of vessel wall morphology. A geometrical model (ellipse) is deformed, translated and rotated to obtain a rough approximation of the contours. Model-matching is based on image gradient measurements. To enhance edges, the images were preprocessed using gray-level stretching. Refinement is performed by means of dynamic programming. Wall thickness is computed by measuring the distance between inner and outer contour of the aortic wall. RESULTS: The algorithm has been tested on high-resolution axial MR images from 28 human subjects of the descending thoracic aorta. The results demonstrate: High correspondence between automatic and manual area measurements: lumen (r = 0.99), outer (r = 0.96), and wall thickness (r = 0.85). CONCLUSION: Though further optimization is required, our algorithm is a powerful tool to automatically draw the boundaries of the aortic wall and measure aortic wall thickness in aortic wall devoid of major lesions. J. Magn. Reson. Imaging 2006. (c) 2006 Wiley-Liss, Inc.},
+  langid = {english},
+  pmid = {16878311},
+  keywords = {Aged,Aged 80 and over,Algorithms,Aorta,Atherosclerosis,Automation,Endothelium Vascular,Humans,Image Processing Computer-Assisted,Magnetic Resonance Imaging,Middle Aged,Models Theoretical,Regression Analysis,Reproducibility of Results,Time Factors}
+}
+
 @misc{azadaniRegionalMechanicalProperties2012,
   title = {Regional {{Mechanical Properties}} of {{Human Pulmonary Root Used}} for the {{Ross Operation}}},
   author = {Azadani, Ali},
@@ -85,6 +102,38 @@
   abstract = {In this paper we present a new strategy for obtaining blood vessel tissue prestress for use in fluid--structure interaction (FSI) analysis of vascular blood flow. The method consists of a simple iterative procedure and is applicable to a large class of vascular geometries. The formulation of the solid problem is modified to account for the tissue prestress by employing an additive decomposition of the second Piola--Kirchhoff stress tensor. Computational results using patient-specific models of cerebral aneurysms indicate that tissue prestress plays an important role in predicting hemodynamic quantities of interest in vascular FSI simulations.},
   keywords = {Blood vessels,Cerebral aneurysms,Fluid-structure interaction,Tissue prestress,Wall shear stress,Wall tension},
   file = {C:\Users\Conor Moore\Zotero\storage\MLAYBNBD\S0168874X10002106.html}
+}
+
+@book{humphrey2013cardiovascular,
+  title = {Cardiovascular {{Solid Mechanics}}: {{Cells}}, {{Tissues}}, and {{Organs}}},
+  shorttitle = {Cardiovascular {{Solid Mechanics}}},
+  author = {Humphrey, Jay D.},
+  year = 2013,
+  month = jun,
+  publisher = {Springer Science \& Business Media},
+  abstract = {The vitality of the cardiovascular system, which consists of the heart, vas culature, and blood, depends on its response to a host of complex stimuli, including biological, chemical, electrical, mechanical, and thermal. The focus of this book, however, is on the response of the heart and arteries to mechanical loads from the perspective of nonlinear solid mechanics. Through my own research in this field, I have come to realize that study ing the complex responses of cardiovascular cells, tissues, and organs nec essarily requires a combined theoretical, experimental, and computational approach. Theory is needed to guide the performance and interpretation of experiments as well as to synthesize the results; experiment is needed to study the responses of the system to well-controlled loads and to test can didate hypotheses and theories; and due to the geometric and material non linearities inherent to cardiovascular mechanics, computation is needed to analyze data as well as to solve boundary and initial value problems that correspond to either experimental or in vivo conditions. One of the primary goals of this book is to introduce together basic analytical, experimental, and computational methods and to illustrate how these methods can and must be integrated to gain a more complete understanding of the bio mechanics of the heart and vasculature. Despite the focus on cardiovascu lar mechanics, the fundamental methods, indeed many of the specific results, are generally applicable to many different soft tissues.},
+  googlebooks = {gwbSBwAAQBAJ},
+  isbn = {978-0-387-21576-1},
+  langid = {english},
+  keywords = {Science / Biotechnology,Science / Life Sciences / Anatomy & Physiology,Science / Life Sciences / Biology,Science / Life Sciences / Biophysics,Science / Life Sciences / Genetics & Genomics,Science / Life Sciences / Human Anatomy & Physiology,Science / Life Sciences / Zoology / General}
+}
+
+@misc{liu2022vascular,
+  title = {Vascular Fluid-Structure Interaction: Unified Continuum Formulation, Image-Based Mesh Generation Pipeline, and Scalable Fully Implicit Solver Technology},
+  shorttitle = {Vascular Fluid-Structure Interaction},
+  author = {Liu, Ju and Huang, Jiayi and Lu, Qingshuang and Sun, Yujie},
+  year = 2022,
+  month = jun,
+  number = {arXiv:2206.06996},
+  eprint = {2206.06996},
+  primaryclass = {physics.flu-dyn},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2206.06996},
+  urldate = {2026-11-16},
+  abstract = {We propose a computational framework for vascular fluid-structure interaction (FSI), focusing on biomechanical modeling, geometric modeling, and solver technology. The biomechanical model is constructed based on the unified continuum formulation. We highlight that the chosen time integration scheme differs from existing implicit FSI integration methods in that it is indeed second-order accurate, does not suffer from the overshoot phenomenon, and optimally dissipates high-frequency modes in both subproblems. We propose a pipeline for generating subject-specific meshes for FSI analysis for anatomically realistic geometric modeling. Unlike most existing methodologies that operate directly on the wall surface mesh, our pipeline starts from the image segmentation stage. With high-quality surface meshes obtained, the volumetric meshes are then generated, guaranteeing a boundary-layered mesh in the fluid subdomain and a matching mesh across the fluid-solid interface. In the last, we propose a combined suite of nonlinear and linear solver technologies. Invoking a segregated algorithm within the Newton-Raphson iteration, the problem reduces to solving two linear systems in the multi-corrector stage. The first linear system can be addressed by the algebraic multigrid (AMG) method. The matrix related to the balance equations presents a two-by-two block structure in both subproblems. Using the Schur complement reduction (SCR) technique reduces the problem to solving matrices of smaller sizes of the elliptic type, and the AMG method again becomes a natural candidate. The benefit of the unified formulation is demonstrated in parallelizing the solution algorithms as the number of unknowns matches in both subdomains. We use the Greenshields-Weller benchmark as well as a patient-specific vascular model to demonstrate the robustness, efficiency, and scalability of the overall FSI solver technology.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computational Engineering Finance and Science,Mathematics - Numerical Analysis,Physics - Biological Physics,Physics - Fluid Dynamics},
+  file = {C\:\\Users\\Conor Moore\\Zotero\\storage\\X3WCP363\\Liu et al. - 2022 - Vascular fluid-structure interaction unified continuum formulation, image-based mesh generation pip.pdf;C\:\\Users\\Conor Moore\\Zotero\\storage\\KEMLIM8K\\2206.html}
 }
 
 @article{liuFluidstructureInteractionModeling2020a,

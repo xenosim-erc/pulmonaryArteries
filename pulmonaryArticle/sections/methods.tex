@@ -50,14 +50,19 @@ Every cap was labelled when it was created: the cap on the largest opening becam
 These labels were carried unchanged into the volume meshes, so each outlet keeps its own identity for the outlet boundary conditions of \cref{sec:bcs}.
 
 \paragraph{Wall thickness}
-Patient- and animal-specific wall thickness was not available from the images, so the wall thickness was prescribed as a fixed fraction of the local vessel diameter,
+Patient- and animal-specific wall thickness was not available from the images, so the wall thickness was prescribed as a fixed fraction of the local vessel diameter, following previous FSI simulations of pulmonary artery \citep{liu2022vascular}.
 \begin{equation}
   h(\vect{x}) = \frac{\varepsilon}{100}\, \tilde{D}\big(\vect{x}\big),
   \label{eq:thickness}
 \end{equation}
 where $\varepsilon$ is the extrusion percentage and $\tilde{D}$ is the centreline diameter, smoothed along each branch with a Gaussian kernel ($\sigma = \SI{10}{\milli\metre}$) and assigned to each surface point from its nearest centreline point.
+$\varepsilon$ is assumed to be 8\% for both human and porcine models.
+There is significant variation in estimates of pulmonary artery wall thickness, however this figure is in line with ex-vivo measurements of human and porcine pulmonary arteries \citep{pillalamarriExVivoRegional2021,azadaniRegionalMechanicalProperties2012}.
+Additionally, the aorta is typically considered to have a mean wall-thickness of \SI{2}{\milli\metre} compared with a diameter of \SI{25}{\milli\metre} \citep{humphrey2013cardiovascular}.
+A sensitivity analysis to wall thickness was run on models with wall thicknesses of 5\% and 10\% with results in \todo{APPENDIX}
+
 Nearest-centreline assignment is discontinuous across bifurcations, so the mapped thickness was further smoothed over the surface (10 passes), which removes the steps without changing the mean thickness appreciably.
-\todo{Fix $\varepsilon$ (currently 5\% in all cases) and justify it against measured human and porcine pulmonary wall thickness-to-diameter ratios; state whether the same $\varepsilon$ is used for both species.}
+
 
 \paragraph{Fluid mesh}
 The fluid domain was meshed with the Cartesian, predominantly hexahedral mesher of cfMesh \citep{juretic2015cfmesh} with a background cell size of \SI{0.8}{\milli\metre}.
