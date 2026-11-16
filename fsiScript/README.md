@@ -139,7 +139,12 @@ geometry that fails at one size is often clean at another.
 ### Wall thickness
 
 `Gauss.py` maps a wall thickness onto the surface as a percentage of the local
-smoothed centerline diameter, found by nearest-centerline lookup. That lookup is
+smoothed centerline diameter (`--extrusion-percentage`, default 8). Measured
+wall thicknesses divided by the mid-trunk centerline diameters of the supplied
+geometries give about 8.5% for the porcine and 5.4% for the human main
+pulmonary artery. Most of the meshing results quoted in this README were
+obtained at 5%; a thicker wall folds more readily, so expect fewer clean solids
+at 8%. The diameter is found by nearest-centerline lookup. That lookup is
 discontinuous: two adjacent surface points either side of a bifurcation can snap
 to different branches, stepping the thickness. Since the solid is built by
 offsetting each point along its own normal, a step in the offset distance twists

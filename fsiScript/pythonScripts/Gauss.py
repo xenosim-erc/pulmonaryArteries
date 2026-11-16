@@ -253,7 +253,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extrusion-percentage",
         type=percentage,
-        default=5.0,
+        default=8.0,
         help="wall thickness as a percentage of local smoothed diameter",
     )
     parser.add_argument(

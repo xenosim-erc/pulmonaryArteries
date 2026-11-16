@@ -971,7 +971,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extrusion-percentage",
         type=float,
-        default=5.0,
+        default=8.0,
         help="wall thickness as a percentage of diameter, matching Gauss.py",
     )
     parser.add_argument(

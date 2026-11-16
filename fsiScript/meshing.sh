@@ -535,9 +535,9 @@ fi
 
 if [[ -z "$extrusion_percentage" ]]; then
     if [[ -t 0 ]]; then
-        read -r -p "Extrusion percentage [5.0]: " extrusion_percentage
+        read -r -p "Extrusion percentage [8.0]: " extrusion_percentage
     fi
-    extrusion_percentage="${extrusion_percentage:-5.0}"
+    extrusion_percentage="${extrusion_percentage:-8.0}"
 fi
 
 echo "Gaussian smoothing sigma: $gaussian_sigma"
