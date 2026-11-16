@@ -8,7 +8,7 @@ Every setting used for a case, together with the version of the workflow that pr
 % ---------------------------------------------------------------------------
 \subsection{Image data and cohort}\label{sec:cohort}
 
-Surface models of \todo{50} human and \todo{44} porcine pulmonary arterial trees were taken from the cohort of \citet{yevtushenkoSimulationBasedComparisonHuman2025}.
+Surface models of \todo{50} human and \todo{44} porcine pulmonary arterial trees were taken from the cohort of \citet{yevtushenkoSimulationBasedComparisonHuman2025} and \citet{goubergrits2023ctbased}.
 
 Porcine pulmonary artery geometries were reconstructed from electrocardiography-gated computed tomography (CT) scans of Swiss Large White pigs (body mass \SI{82.6 \pm 18.8}{\kilo\gram}), obtained retrospectively from ETH Zürich.
 These animal studies were approved by the local Committee for Experimental Animal Research (Cantonal Veterinary Office Zurich, Switzerland) under the approval numbers 152/2013, 219/2016 and 138/2017.
@@ -19,10 +19,14 @@ Scans were performed with either an Aquilion One Vision (Canon Medical Systems, 
 Geometries were reconstructed in ZIBAmira (version 2015.28, Zuse Institute Berlin, Berlin, Germany) by semi-automatic segmentation of images acquired during diastole.
 \todo{Ethical approval for the use of the human data.}
 Further details of the reconstruction procedure, and an analysis of inter-operator bias, are given in a comparative study of pulmonary artery morphometry \citep{goubergrits2023ctbased}.
-\todo{Patients referred for TAVI frequently have raised pulmonary pressures, and the human main pulmonary arteries here (median centreline diameter \SI{27.9}{\milli\metre}) are wider than typical healthy values. State whether pressures were available and whether any subjects were excluded, and discuss this as a limitation.}
 
 \todo{Subject characteristics: age, sex, body mass, haemodynamic status (healthy vs PAH, if part of the study); a table of these per species.}
 
+Some assumptions and limitations are necessary at this point.
+It is not known but assumed that the images of the porcine geomtries are taken at diastole.
+The actual pulmonary arterial pressures are not known.
+It is possible based on the age and liklihood of comorbidities of TAVI patients that the human pulmonary arteries have experienced elevated pressures which is also suggested by vessel diameters which are larger than typical.
+\todo{citation}
 
 \todo{Inclusion and exclusion criteria, including geometries excluded because their solid mesh failed the quality check of \cref{sec:Meshing}.}
 
@@ -46,8 +50,6 @@ How much this and the windowed-sinc smoothing moved the surface, and their effec
 Because the surface moves, the centrelines were extracted again after this step.
 
 \paragraph{Capping and boundary identification}
-No flow extensions were added; each opening was capped on its original rim.
-\note{Justify briefly: the solid ends are fixed (\cref{sec:bcs}), so planar circular end rings are not required, and the blend into a circular extension was itself a source of distorted cells.}
 Each opening was closed by a triangle fan that was then remeshed into isotropic triangles sized from the wall triangles on its rim, leaving the vessel wall unchanged.
 Every cap was labelled when it was created: the cap on the largest opening became the inlet, the remaining caps outlets $1,\dots,N$, and the remainder the vessel wall.
 These labels were carried unchanged into the volume meshes, so each outlet keeps its own identity for the outlet boundary conditions of \cref{sec:bcs}.
