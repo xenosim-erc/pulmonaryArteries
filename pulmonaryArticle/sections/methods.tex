@@ -97,7 +97,7 @@ The arterial wall was modelled as a hyperelastic solid, solved in a total Lagran
 \end{equation}
 where $\vect{d}$ is the displacement, $\tens{P}$ the first Piola--Kirchhoff stress, $\tens{F}$ the deformation gradient and $W$ the strain-energy function of the wall.
 When prestress is included (\cref{sec:prestress}), $\tens{F}$ in \cref{eq:solid} is replaced by $\tens{F}\tens{F}_{\mathrm{pre}}$.
-\todo{Constitutive law not yet chosen. Give $W$ for the final law (isotropic or anisotropic, e.g.\ fibre-reinforced) and justify it for pulmonary arterial tissue. The current templates use a compressible neo-Hookean law, $\boldsymbol{\sigma} = \frac{\mu}{J}\mathrm{dev}(\bar{\tens{b}}) + \frac{\kappa}{2}\frac{J^2-1}{J}\tens{I}$; if that is kept, state it here and check it against the solids4foam version used.}
+\todo{Constitutive law not yet chosen. Give $W$ for the final law (isotropic or anisotropic, e.g.\ fibre-reinforced) and justify it for pulmonary arterial tissue. The current templates use a compressible neo-Hookean law, $\boldsymbol{\sigma} = \frac{\mu}{J}\mathrm{dev}(\bar{\tens{B}}) + \frac{\kappa}{2}\frac{J^2-1}{J}\tens{I}$; if that is kept, state it here and check it against the solids4foam version used.}
 \todo{Material parameters for both species, with sources (\cref{tab:params}); they are coupled to the choice of wall thickness $\varepsilon$.}
 The model parameters for each species are listed in \cref{tab:params}.
 
@@ -164,21 +164,22 @@ The images of the pulmonary geometries are taken while the artery walls are alre
 Assuming this, herein named the reference configuration, to be the zero-pressure geometry would lead to an over-inflation of the arteries when loaded by the flow.
 This is taken into account using a methodology based on the MULF prestressing of \citet{gee2010computational}.
 
-An internal load of \SI{10}{mmHg} is applied to the internal surface of the solid mesh in the reference configuration to obtain a deformed geometry.
-The deformation gradient tensor $\vect{F}$ and, by extension, the state of stress of the deformed geometry are then applied to the reference configuration.
-This will not, in general, be in equilibrium if \SI{10}{mmHg} is applied due to the difference in topology.
-Hence, further passes are run with the deformation gradient updated according to \cref{eq:MULF}.
-
+An internal pressure equal to the imaging pressure, $p_0$ (\cref{tab:params}), is applied to the internal surface of the solid mesh in the reference configuration to obtain a deformed geometry.
+The deformation gradient tensor $\tens{F}$ and, by extension, the state of stress of the deformed geometry are then applied to the reference configuration.
+This will not, in general, be in equilibrium with $p_0$, because the deformed and reference configurations differ.
+Hence, further passes are run with the prestress deformation gradient updated according to
 \begin{equation}
-  \vect{F_{\mathrm{pre_\mathrm{t+1}}}} = \vect{F_{t}} \vect{F_{\mathrm{pre_\mathrm{t}}}}
+  \tens{F}_{\mathrm{pre}}^{(k+1)} = \tens{F}^{(k)}\,\tens{F}_{\mathrm{pre}}^{(k)},
+  \qquad \tens{F}_{\mathrm{pre}}^{(0)} = \tens{I},
   \label{eq:MULF}
 \end{equation}
+where $\tens{F}^{(k)}$ is the deformation gradient of pass $k$, measured from the reference configuration.
 
 After each pass the mesh is reset to the reference configuration, so that the geometry used in the FSI simulation is the imaged one.
 In the first pass the pressure is ramped up from zero; in later passes it is applied in full.
 Passes are repeated until the maximum displacement in a pass falls below one tenth of the thinnest wall in the geometry, with a limit of 30 passes; the resulting $\tens{F}_{\mathrm{pre}}$ is then used as the initial state of the wall in the FSI simulation.
 The fluid pressure and the Windkessel pressures are likewise initialised at the imaging pressure.
-\todo{Justify \SI{10}{mmHg} as the imaging pressure for each species (and whether it differs for PAH subjects); report the number of passes required and any cases that did not converge.}
+\todo{Justify $p_0 = \SI{10}{mmHg}$ as the imaging pressure for each species (and whether it differs for PAH subjects); report the number of passes required and any cases that did not converge.}
 
 % ---------------------------------------------------------------------------
 \subsection{Fluid--solid coupling and numerics}\label{sec:fsi}
