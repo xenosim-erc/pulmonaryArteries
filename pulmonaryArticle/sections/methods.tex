@@ -52,7 +52,7 @@ Every cap was labelled when it was created: the cap on the largest opening becam
 These labels were carried unchanged into the volume meshes, so each outlet keeps its own identity for the outlet boundary conditions of \cref{sec:bcs}.
 
 \paragraph{Wall thickness}
-Patient- and animal-specific wall thickness was not available from the images, so the wall thickness was prescribed as a fixed fraction of the local vessel diameter, a common assumption in FSI simulations of the pulmonary arteries \citep{liu2020fluid,humphrey2013cardiovascular},
+Patient- and animal-specific wall thickness was not available from the images, so the wall thickness was prescribed as a fixed fraction of the local vessel diameter, a common assumption in arterial FSI simulations \citep{liu2020fluid,zambranoImagebasedComputationalAssessment2018,yangEvolutionHemodynamicForces2019},
 \begin{equation}
   h(\vect{x}) = \frac{\varepsilon}{100}\, \tilde{D}\big(\vect{x}\big),
   \label{eq:thickness}
@@ -60,13 +60,16 @@ Patient- and animal-specific wall thickness was not available from the images, s
 where $\varepsilon$ is the extrusion percentage and $\tilde{D}$ is the centreline diameter, smoothed along each branch with a Gaussian kernel ($\sigma = \SI{10}{\milli\metre}$) and assigned to each surface point from its nearest centreline point.
 Nearest-centreline assignment is discontinuous across bifurcations, so the mapped thickness was further smoothed over the surface (10 passes), which removes the steps without changing the mean thickness appreciably.
 
-The extrusion percentage was set to $\varepsilon = 8$ for both species.
+The extrusion percentage was taken to be $\varepsilon = 8$ for both species, contrary to the 10\% used in the works of both Liu et al. and Yang et al.
 Estimates of pulmonary arterial wall thickness vary widely with the measurement method: for the human main pulmonary artery they range from \SI{0.43}{\milli\metre} on fixed histological sections \citep{mackay1978structural} to \SI{3.6}{\milli\metre} on transthoracic echocardiography \citep{agackiran2023pulmonary}.
 \textit{Ex vivo} measurements give a wall thickness of \SI{1.99 \pm 0.27}{\milli\metre} for the main pulmonary artery of pigs of similar body mass to the present cohort \citep{pillalamarriExVivoRegional2021} and \SI{1.5 \pm 0.3}{\milli\metre} for the proximal human pulmonary artery \citep{azadani2012biomechanical}.
-Relative to the median centreline diameter $\tilde{D}$ at the middle of the main pulmonary artery in the present cohorts, \SI{23.5}{\milli\metre} (porcine) and \SI{27.9}{\milli\metre} (human), these correspond to approximately 8.5\% and 5.4\%, respectively.
-For comparison, the wall of the aorta is approximately \SI{2}{\milli\metre} thick at a diameter of \SI{25}{\milli\metre}, or 8\% \citep{burton1954relation}.
-\todo{Justify a single value for both species given the approximately 8.5\% (porcine) and 5.4\% (human) above, or use species-specific values.}
-The sensitivity of the results to this choice was assessed by repeating \todo{N} simulations with $\varepsilon = 5$ and $\varepsilon = 10$ (\cref{app:thickness}).
+
+Relative to the median centreline diameter $\tilde{D}$ at the middle of the main pulmonary artery in the present cohorts, \SI{23.5}{\milli\metre} (porcine) and \SI{27.9}{\milli\metre} (human), the \textit{ex vivo} measurements correspond to approximately 8.5\% and 5.4\%, respectively.
+8\% was chosen as it closely matches the porcine measurement and lies in the middle of the range of measured human pulmonary artery values.
+Additionally it matches the traditional value for the aorta of a \SI{2}{\milli\metre} thick vessel with a diameter of \SI{25}{\milli\metre} \citep{burton1954relation}.
+
+\todo{The sensitivity of the results to this choice was assessed by repeating \todo{N} simulations with $\varepsilon = 5$ and $\varepsilon = 10$ (\cref{app:thickness}).}
+
 
 
 \paragraph{Fluid mesh}
