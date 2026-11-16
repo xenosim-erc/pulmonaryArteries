@@ -8,9 +8,20 @@ Every setting used for a case, together with the version of the workflow that pr
 % ---------------------------------------------------------------------------
 \subsection{Image data and cohort}\label{sec:cohort}
 
-Surface models of \todo{50} human and \todo{44} porcine pulmonary arterial trees were used.
+Surface models of \todo{50} human and \todo{44} porcine pulmonary arterial trees were used. These geometries were obtained from \citep{yevtushenkoSimulationBasedComparisonHuman2025}.
+
 \todo{Imaging modality, resolution and phase of the cardiac cycle at acquisition; segmentation method and software; source of each cohort; ethical approval and animal licence numbers.}
+Porcine pulmonary artery geometries were reconstructed using electrocardiography-gated computed tomography (CT) scans retrospectively obtained from the ETH Zürich (Swiss Large White, weight 82.6 ± 18.8 kg).
+These animal studies were approved by the local Committee for Experimental Animal Research (Cantonal Veterinary Office Zurich, Switzerland) under the approval numbers 152/2013, 219/2016 and 138/2017.
+
+Human PA image data was obtained from routine transcatheter aortic-valve replacement (TAVI) planning.
+CT scans were performed with either an Aquilion One Vision (Canon Medical Systems, Tochigi, Japan) or a Revolution CT (GE Healthcare, Chicago, IL, USA) yielding an in-plane resolution of 0.39–0.648 mm x 0.39–0.648 mm and a slice thickness of 0.5–1 mm.
+Geometry reconstruction was performed using ZIBAmira (version 2015.28, Zuse Institute Berlin, Berlin, Germany) from images acquired during the diastole using semi-automatic segmentation approach.
+Further information on reconstruction procedure and inter-operator bias analysis can be found in a comparative study of pulmonary artery morphometry \citep{goubergrits2023ctbased}.
+
 \todo{Subject characteristics: age, sex, body mass, haemodynamic status (healthy vs PAH, if part of the study); a table of these per species.}
+
+
 \todo{Inclusion and exclusion criteria, including geometries excluded because their solid mesh failed the quality check of \cref{sec:Meshing}.}
 
 % ---------------------------------------------------------------------------
