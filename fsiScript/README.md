@@ -428,7 +428,7 @@ and `pig`. The chosen values are written into the run case's
 | `C` [m^3/Pa], whole bed | `3.14e-8` (4.19 mL/mmHg, Lungu text) | `3.81e-8` (5.08 mL/mmHg) |
 | Wall | `isotropicFungElastic`, `c` 7.87 kPa, `a` 7.05, `K` 1 MPa: the solids4foam pulmonaryArteries tutorial's fit to Azadani et al. 2012 | `isotropicFungElastic`, `c` 11.2 kPa, `a` 2.15, `K` 1 MPa: fitted the same way to Matthews et al. 2010 (porcine supravalvular PA), taking the circumferential coefficient as correct |
 | Imaging (diastolic) pressure | 10 mmHg, assumed; healthy range 4–12 | 15 mmHg, García-Lunar diastolic |
-| First prestress pass | 4 load steps | 8 load steps (softer wall, higher pressure) |
+| First prestress pass | 4 load steps | 16 load steps (softer wall, higher pressure) |
 | Pulse step for the wall compliance | 12 mmHg (to 22 mmHg; healthy systolic 15–25) | 11 mmHg (15 → 26, García-Lunar) |
 | Mean pressure at the template inflow | about 11.5 mmHg (3.95 L/min) | about 19.5 mmHg (5.26 L/min; they measured 21) |
 
@@ -454,7 +454,7 @@ fluid-solid interaction run:
    the run's deformation gradient into the prestress, `Fpre <- F & Fpre`, and
    resets the wall to the imaged shape. Pass 1 runs with `prestress no` and
    ramps the pressure up over `--prestress-ramp-steps` load steps (from the
-   animal file: 4 human, 8 pig); later passes run with `prestress yes` at full
+   animal file: 4 human, 16 pig); later passes run with `prestress yes` at full
    pressure. It takes the wall material and solid mesh from the run case each
    time, so `Fpre` always matches what the fluid-solid interaction run solves.
 2. Passes stop once the wall moves less than `--prestress-tolerance-fraction`

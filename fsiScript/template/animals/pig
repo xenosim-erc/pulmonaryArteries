@@ -52,9 +52,10 @@ prestressPressure   15          # mmHg       --prestress-pressure
 # zero on the scanned geometry. The pig wall is softer and its imaging
 # pressure higher than the human's, so that pass deforms it much further
 # (about 28% hoop stretch for a wall 8% of the diameter, against 8% for the
-# human wall at 10 mmHg; thin-tube estimate) and
-# is given twice the steps. Only 2 and 5 may be factors (4, 5, 8, 10, 16, ...)
-prestressRampSteps  8           #            --prestress-ramp-steps
+# human wall at 10 mmHg; thin-tube estimate) and is given four times the
+# steps (8 stalled in the first step on p16). Only 2 and 5 may be factors
+# (4, 5, 8, 10, 16, ...)
+prestressRampSteps  16          #            --prestress-ramp-steps
 
 # Pressure step over which the 3D wall compliance is measured, from the
 # imaging pressure up: a pulse pressure, so the result is the secant
