@@ -50,6 +50,49 @@ then
     fi
 fi
 
+### Outlet Windkessel compliance
+# The Windkessel compliance from meshing.sh is that measured for the whole
+# pulmonary bed, which includes the arteries this case models with a compliant
+# wall. When windkessel/settings is present (meshing.sh without
+# --no-compliance-correction), prestress/Allprobe measures the compliance of
+# the 3D wall, and the outlets are split again with what is left. Until then
+# 0/fluid/windkesselOutlets holds the whole-bed split. Only the Python
+# standard library is needed; set PYTHON to use another interpreter.
+if [ -f windkessel/settings ]
+then
+    if ! (cd prestress && ./Allprobe parallel)
+    then
+        echo "prestress/Allprobe failed: the 3D wall compliance is unknown." >&2
+        exit 1
+    fi
+    . windkessel/settings
+    wallCompliance="$(awk '$1 !~ /^#/ && NF { v = $1 } END { print v }' prestress/wallCompliance)"
+    outletCompliance="$(awk -v c="$wholeBedCompliance" -v w="$wallCompliance" \
+        'BEGIN { printf "%.6g", c - w }')"
+    if ! awk -v c="$outletCompliance" 'BEGIN { exit !(c + 0 > 0) }'
+    then
+        echo "The 3D wall compliance ($wallCompliance m^3/Pa) is not less than the" >&2
+        echo "whole-bed compliance ($wholeBedCompliance m^3/Pa); not running." >&2
+        exit 1
+    fi
+    echo "Outlet compliance: whole bed $wholeBedCompliance - 3D wall $wallCompliance = $outletCompliance m^3/Pa" \
+        > log.windkesselOutlets
+    if ! "${PYTHON:-python3}" windkessel/windkessel_outlets.py \
+        windkessel/outletAreas.csv 0/fluid/windkesselOutlets \
+        --proximal-resistance "$proximalResistance" \
+        --distal-resistance "$distalResistance" \
+        --compliance "$outletCompliance" \
+        --exponent "$flowSplitExponent" \
+        --transport-properties constant/fluid/transportProperties \
+        --initial-pressure "$initialPressure" >> log.windkesselOutlets 2>&1
+    then
+        cat log.windkesselOutlets >&2
+        echo "Could not split the Windkessel across the outlets." >&2
+        exit 1
+    fi
+    cat log.windkesselOutlets
+fi
+
 ### Decompose case
 # The solid fields are decomposed rather than copied with -copyZero, which
 # only suits uniform fields: Fpre differs from cell to cell

@@ -20,6 +20,9 @@ rm -rf constant/polyMesh
 rm -rf postProcessing
 rm -f case.foam
 
+# The 3D wall compliance written by Allprobe
+rm -f wallCompliance
+
 # Dictionaries with every default written out, by solids4Foam
 rm -f constant/*.withDefaultValues
 

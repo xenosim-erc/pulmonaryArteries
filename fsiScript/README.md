@@ -300,8 +300,10 @@ The inlet is a `flowRateInletVelocity` whose volumetric flow rate is a
 `tableFile`: one cardiac cycle of `(time flowRate)` pairs in m^3/s, repeated
 for as long as the run lasts. Each template carries a human cycle
 (`humanFlow`, 0.86 s) and a porcine one (`pigFlow`, 0.66 s) in
-`constant/fluid/inletFlow`. The workflow asks which species the case is, or
-reads `--species human|porcine`, and points `0/fluid/U` at the matching file.
+`constant/fluid/inletFlow`. `--animal` picks the matching one; without it the
+workflow asks, or reads `--inlet-flow`. That takes either one of those names
+or the path to any file in the same format, which is copied into the run
+case's `constant/fluid/inletFlow`. `0/fluid/U` is pointed at the chosen file.
 The files are kept out of `0/` because OpenFOAM tries to read every file there
 as a field.
 
@@ -333,11 +335,43 @@ cells per processor, to help judge whether the core count suits the mesh.
 
 ### Outlet Windkessel parameters
 
-Every outlet is a three-element Windkessel (`windkesselPressure`). The workflow
-asks for totals for the whole distal bed: proximal resistance `Rp` (default
-`3.3e6` Pa s/m^3), distal resistance `Rd` (`2e7` Pa s/m^3) and compliance `C`
-(`3.5e-8` m^3/Pa). Pass `--wk-proximal-resistance`, `--wk-distal-resistance`
-and `--wk-compliance` instead to skip the prompts. Each outlet gets the flow
+Every outlet is a three-element Windkessel (`windkesselPressure`), set from
+totals for the whole pulmonary bed: proximal resistance `Rp`, distal
+resistance `Rd` and compliance `C`. They come from the animal file (see
+[Animal defaults](#animal-defaults)), or, without `--animal`, are asked for
+with the human values as defaults. `--wk-proximal-resistance`,
+`--wk-distal-resistance` and `--wk-compliance` override them.
+
+A measured `C` belongs to the whole bed, including the proximal arteries that
+the FSI wall already models. So that this compliance is not counted twice, the
+wall's share is taken off `C` before the split.
+
+The wall's share depends on its material law and prestressed state, so it is
+measured, not estimated, when the case runs:
+
+1. `meshing.sh` first splits the whole-bed `C`, so the case is complete as
+   generated. It writes `windkessel/` (the totals in `settings`, the outlet
+   areas and a copy of `windkessel_outlets.py`) and the probe's pressure table
+   `prestress/constant/timeVsPressure.probe`.
+2. After the prestress, the case's `Allrun` runs `prestress/Allprobe`. This is
+   one more solid-only run on the prestressed wall. It steps the inner-wall
+   pressure from the imaging pressure up by `--compliance-pressure-step`, a
+   pulse pressure from the animal file (12 mmHg human, 11 mmHg pig).
+3. The lumen volume change is `-∫D·dS` over `innerWall` (a `surfaceFieldValue`
+   function object). The secant compliance `C3D = dV/dp` over the pulse is
+   written to `prestress/wallCompliance`.
+4. `Allrun` then splits the outlets again with `C - C3D`, using `python3` (or
+   `$PYTHON`; only the standard library is needed), and logs the result in
+   `log.windkesselOutlets`. It stops if `C3D` is not smaller than `C`.
+
+On h08 with the earlier neo-Hookean wall (`E` 300 kPa, 8% thickness), `C3D`
+was `9.1e-9` m^3/Pa, about 29% of the human `C`. It has not yet been measured
+with the Fung wall.
+`--no-compliance-correction` splits `C` unchanged. `--no-prestress` turns the
+correction off too, since it is measured on the prestressed wall.
+`./Allprobe` can be rerun on its own in `prestress/` once `0/Fpre` exists.
+
+Each outlet gets the flow
 fraction `f_i = A_i^(k/2) / sum A_j^(k/2)`, and with it `Rch_i = Rp/f_i`,
 `R_i = Rd/f_i` and `C_i = C f_i`. The outlets in parallel then add up to the
 totals, and each outlet keeps the time constant `Rd C`. `k` is
@@ -360,23 +394,50 @@ parallel (`1 / sum(1/R_i)`) and the compliances summed. It compares the results
 with the requested totals and stops if any differs by more than 1e-4. The
 comparison table is printed and saved in the run case's `log.windkesselOutlets`.
 
-### Species defaults
+### Animal defaults
 
-The parameters that differ between species live in one file per species,
-`template/species/human` and `template/species/porcine`: the inlet waveform,
-the wall material (density, Young's modulus and Poisson's ratio of the
-`neoHookeanElastic` wall), the Windkessel totals and the imaging pressure.
-`--species` picks the file. Every value can be overridden on the command line
-(`--wall-density`, `--wall-youngs-modulus`, `--wall-poisson-ratio`,
-`--wk-proximal-resistance`, `--wk-distal-resistance`, `--wk-compliance`,
-`--prestress-pressure`); the Windkessel totals and the imaging pressure are
-also asked for when run interactively, with the species values as the
-defaults. The chosen values are written into the run case's
+The parameters that differ between animals are kept in one file per animal,
+`template/animals/human` and `template/animals/pig`:
+
+- the inlet waveform;
+- the wall material: the law (`--wall-model`) and its parameters. For
+  `isotropicFungElastic` these are the density, `c`, `a` and the bulk modulus
+  (`--wall-fung-c`, `--wall-fung-a`, `--wall-bulk-modulus`). For
+  `neoHookeanElastic` they are the density, Young's modulus and Poisson's
+  ratio. The template's `mechanical ( ... );` list is replaced by this one law;
+- the Windkessel totals;
+- the imaging pressure.
+
+`--animal human|pig` sets all of these from the file without asking. Without
+`--animal`, each is asked for when run interactively, with the human value as
+the default, and the human values are used when there is no terminal. A value
+on the command line always wins: `--inlet-flow`, `--wall-model` and the wall
+parameters, `--wall-density`,
+`--wall-youngs-modulus`, `--wall-poisson-ratio`, `--wk-proximal-resistance`,
+`--wk-distal-resistance`, `--wk-compliance` and `--prestress-pressure`.
+`--species` and `porcine` are still accepted as old spellings of `--animal`
+and `pig`. The chosen values are written into the run case's
 `constant/solid/mechanicalProperties` and recorded in `meshing.params`.
 
-The porcine file currently repeats the human wall and Windkessel values and is
-marked `placeholder yes`, so `meshing.sh` warns whenever it is used. Replace
-the values with porcine ones and set `placeholder no`.
+| | Human | Pig |
+|---|---|---|
+| Source | healthy volunteers, Lungu et al. 2014, J Biomech 47:2941 | sham (control) group, García-Lunar et al. 2024, Basic Res Cardiol (10.1007/s00395-024-01041-5) |
+| `Rp` [Pa s/m^3] | `3.3e6` (read off Lungu Fig. 4) | `4.44e6` (15% of total; Zc/Z0 in healthy pigs, Pérez del Villar et al. 2019, J Physiol) |
+| `Rd` [Pa s/m^3] | `2e7` (read off Lungu Fig. 4) | `2.52e7` |
+| `Rp + Rd` | 2.9 WU | 3.7 WU, their PVR |
+| `C` [m^3/Pa], whole bed | `3.14e-8` (4.19 mL/mmHg, Lungu text) | `3.81e-8` (5.08 mL/mmHg) |
+| Wall | `isotropicFungElastic`, `c` 7.87 kPa, `a` 7.05, `K` 1 MPa: the solids4foam pulmonaryArteries tutorial's fit to Azadani et al. 2012 | `isotropicFungElastic`, `c` 11.2 kPa, `a` 2.15, `K` 1 MPa: fitted the same way to Matthews et al. 2010 (porcine supravalvular PA), taking the circumferential coefficient as correct |
+| Imaging (diastolic) pressure | 10 mmHg, assumed; healthy range 4–12 | 15 mmHg, García-Lunar diastolic |
+| First prestress pass | 4 load steps | 8 load steps (softer wall, higher pressure) |
+| Pulse step for the wall compliance | 12 mmHg (to 22 mmHg; healthy systolic 15–25) | 11 mmHg (15 → 26, García-Lunar) |
+| Mean pressure at the template inflow | about 11.5 mmHg (3.95 L/min) | about 19.5 mmHg (5.26 L/min; they measured 21) |
+
+The outlets drain to 0 Pa, so the mean pressure is `(Rp + Rd) Q`.
+
+`placeholder yes` in an animal file makes `meshing.sh` warn whenever that file
+is used; neither file is marked at present. `--prestress-ramp-steps` sets the
+number of load steps of the first prestress pass (only 2 and 5 may be factors,
+so that the steps land exactly on `endTime` 1).
 
 ### Prestress
 
@@ -392,7 +453,8 @@ fluid-solid interaction run:
    `solids4Foam` (a steady-state solve) and `updatePrestress`, which composes
    the run's deformation gradient into the prestress, `Fpre <- F & Fpre`, and
    resets the wall to the imaged shape. Pass 1 runs with `prestress no` and
-   ramps the pressure up; later passes run with `prestress yes` at full
+   ramps the pressure up over `--prestress-ramp-steps` load steps (from the
+   animal file: 4 human, 8 pig); later passes run with `prestress yes` at full
    pressure. It takes the wall material and solid mesh from the run case each
    time, so `Fpre` always matches what the fluid-solid interaction run solves.
 2. Passes stop once the wall moves less than `--prestress-tolerance-fraction`
@@ -405,7 +467,7 @@ fluid-solid interaction run:
    `constant/solid/mechanicalProperties`).
 
 The imaging pressure comes from `--prestress-pressure` in mmHg (default
-10 mmHg, from the species file). The fluid-solid interaction run starts from
+10 mmHg, from the animal file). The fluid-solid interaction run starts from
 it too: `0/fluid/p` and every Windkessel outlet are initialised to it, so the
 prestressed wall starts in equilibrium. On h08 the prestress converged in 27
 passes (8.8 minutes on 16 cores), the residual displacement falling by about

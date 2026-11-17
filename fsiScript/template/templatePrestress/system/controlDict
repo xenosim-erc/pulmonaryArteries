@@ -44,4 +44,25 @@ timePrecision   6;
 
 runTimeModifiable no;
 
+functions
+{
+    // Integral of D . dS over the inner wall, from which Allprobe works out
+    // the lumen volume change and so the compliance of the 3D wall. Allprobe
+    // switches it on for its own run only; the prestress passes skip it.
+    lumenVolume
+    {
+        type            surfaceFieldValue;
+        libs            (fieldFunctionObjects);
+        enabled         false;
+        writeControl    timeStep;
+        writeInterval   1;
+        log             true;
+        writeFields     false;
+        regionType      patch;
+        name            innerWall;
+        operation       areaNormalIntegrate;
+        fields          (D);
+    }
+}
+
 // ************************************************************************* //

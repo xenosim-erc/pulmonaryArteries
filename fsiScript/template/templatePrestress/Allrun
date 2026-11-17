@@ -111,7 +111,8 @@ setPressure()
 }
 
 # Time step in system/controlDict (endTime 1): pass 1 ramps the pressure over
-# four load steps, later passes hold it in a single step
+# 1/rampDeltaT load steps (set by meshing.sh, per animal), later passes hold
+# it in a single step
 rampDeltaT=0.25
 fullDeltaT=1
 

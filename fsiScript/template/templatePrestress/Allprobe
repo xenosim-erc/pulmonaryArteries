@@ -1,0 +1,162 @@
+#!/bin/bash
+#------------------------------------------------------------------------------
+# Measure the compliance of the 3D arterial wall, dV/dp of the lumen
+#
+# The outlet Windkessel compliance should be the measured compliance of the
+# whole pulmonary bed less the part that the fluid-solid interaction wall
+# already provides. That part depends on the wall's material law and its
+# prestressed state, so it is measured rather than estimated: after Allrun has
+# found Fpre, one more solid-only run starts from the prestressed wall at the
+# imaging pressure p0 and steps the inner-wall pressure up to p1 = p0 + dp,
+# where dp is a typical pulse pressure. This gives the secant compliance over
+# the pulse, which is what the measured whole-bed values are.
+#
+# The pressures come from constant/timeVsPressure.probe (written by
+# meshing.sh): it holds p0 at t = 0.25, the first of four load steps, and
+# ramps to p1 at t = 1. The run at t = 0.25 removes the small displacement
+# left at p0 by the finite prestress tolerance. The lumen volume change is
+#
+#     dV = -(I(1) - I(0.25)),   I = integral of D . dS over innerWall,
+#
+# from the lumenVolume function object in system/controlDict
+# (surfaceFieldValue, areaNormalIntegrate). The innerWall normals point out of
+# the solid, into the lumen, so the wall moving outwards makes I negative. The
+# inlet and outlet rings are fixed, so the ends of the lumen do not move. The
+# result, C3D = dV / (p1 - p0) in m^3/Pa, is written to wallCompliance.
+#
+# Usage:
+#   ./Allprobe           # run in parallel, numberOfSubdomains in
+#                        # system/decomposeParDict
+#   ./Allprobe serial    # run in serial
+#
+# Needs 0/Fpre, so run ./Allrun first. "prestress yes;" is set here.
+#------------------------------------------------------------------------------
+
+set -Eeo pipefail
+IFS=$'\n\t'
+
+cd "$(cd "$(dirname "$0")" && pwd)"
+
+: "${WM_PROJECT_DIR:?OpenFOAM environment is not sourced}"
+
+source solids4FoamScripts.sh
+
+runParallel=yes
+
+for arg in "$@"
+do
+    case "$arg" in
+        serial)
+            runParallel=no
+            ;;
+        parallel)
+            runParallel=yes
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: ./Allprobe [serial|parallel]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+probeTable=constant/timeVsPressure.probe
+history=postProcessing/lumenVolume/0/surfaceFieldValue.dat
+
+for required in 0/Fpre "$probeTable" constant/mechanicalProperties constant/polyMesh
+do
+    if [ ! -e "$required" ]
+    then
+        echo "Not found: $required (run ./Allrun first)" >&2
+        exit 1
+    fi
+done
+
+# Pressure at time t in the probe table, linearly interpolated
+pressureAt()
+{
+    awk -v t="$1" '
+        { gsub(/[()]/, " ") }
+        NF == 2 && $1 ~ /^[0-9.eE+-]+$/ { time[n] = $1; p[n] = $2; n++ }
+        END {
+            for (i = 0; i < n; i++) {
+                if (time[i] >= t) {
+                    if (i == 0 || time[i] == t) { print p[i]; exit }
+                    f = (t - time[i-1]) / (time[i] - time[i-1])
+                    print p[i-1] + f * (p[i] - p[i-1]); exit
+                }
+            }
+            print p[n-1]
+        }' "$probeTable"
+}
+
+# Value of the integral I at time t, from the function-object history
+integralAt()
+{
+    awk -v t="$1" '
+        $1 !~ /^#/ && NF >= 2 && ($1 + 0 == t + 0) { v = $2 }
+        END { if (v == "") exit 1; print v }' "$history"
+}
+
+setKeyword()
+{
+    local file="$1" key="$2" value="$3"
+    sed -E "s/^([[:space:]]*$key[[:space:]]+)[^;]+;/\1$value;/" \
+        "$file" > "$file.tmp"
+    mv "$file.tmp" "$file"
+}
+
+# Restore the Allrun settings however this script ends
+cleanUp()
+{
+    setKeyword system/controlDict enabled false
+    setKeyword system/controlDict deltaT 0.25
+    if [ "$runParallel" = yes ]
+    then
+        rm -rf processor[0-9]*
+    fi
+    rm -rf [1-9]* 0.[0-9]*
+}
+trap cleanUp EXIT
+
+cp "$probeTable" constant/timeVsPressure
+setKeyword constant/mechanicalProperties prestress yes
+setKeyword system/controlDict deltaT 0.25
+setKeyword system/controlDict enabled true
+rm -rf postProcessing/lumenVolume [1-9]* 0.[0-9]* processor[0-9]*
+
+if [ "$runParallel" = yes ]
+then
+    solids4Foam::runApplication -o -s probe decomposePar -force
+    solids4Foam::runParallel -o -s probe solids4Foam
+else
+    solids4Foam::runApplication -o -s probe solids4Foam
+fi
+
+p0="$(pressureAt 0.25)"
+p1="$(pressureAt 1)"
+if ! i0="$(integralAt 0.25)" || ! i1="$(integralAt 1)"
+then
+    echo "The probe run did not reach t = 0.25 and t = 1; see log.solids4Foam.probe and $history" >&2
+    exit 1
+fi
+
+compliance="$(awk -v i0="$i0" -v i1="$i1" -v p0="$p0" -v p1="$p1" \
+    'BEGIN { printf "%.6g", -(i1 - i0) / (p1 - p0) }')"
+if ! awk -v c="$compliance" 'BEGIN { exit !(c + 0 > 0) }'
+then
+    echo "The probe gave a non-positive wall compliance, $compliance m^3/Pa; see $history" >&2
+    exit 1
+fi
+
+{
+    echo "# Compliance of the 3D wall, written by Allprobe on $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "# Pressure stepped from $p0 Pa to $p1 Pa with the prestressed wall;"
+    echo "# integral of D . dS over innerWall: $i0 m^3 at p0, $i1 m^3 at p1."
+    echo "# Lumen volume change $(awk -v a="$i0" -v b="$i1" 'BEGIN { printf "%.6g", a - b }') m^3."
+    echo "$compliance"
+} > wallCompliance
+
+echo "3D wall compliance: $compliance m^3/Pa (pressure $p0 -> $p1 Pa)"
+
+#------------------------------------------------------------------------------

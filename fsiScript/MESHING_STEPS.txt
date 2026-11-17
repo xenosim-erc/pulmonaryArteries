@@ -15,8 +15,11 @@ PRE-FLIGHT
  4. Check the meshing utilities        surfaceFeatureEdges, cartesianMesh, checkMesh,
                                        createPatch, mapExtrudeDistance, varExtrudeMesh.
  5. Read the command line              Prompt for every setting not supplied (wall model,
-                                       coupling, scale, species, heartbeats, cores,
-                                       Windkessel totals) if a terminal is attached.
+                                       coupling, scale, heartbeats, cores) if a terminal
+                                       is attached. --animal human|pig sets the inlet
+                                       waveform, wall, Windkessel totals and imaging
+                                       pressure from template/animals/<animal>; without
+                                       it each is asked for (human defaults).
  5a. Check the run case name           Stop now if run/<name> already exists, before any
                                        meshing is done.
  5b. Confirm the settings              Print every resolved setting and ask to proceed.
@@ -117,8 +120,8 @@ CASE ASSEMBLY
 38. Copy the case template              templateCaseRobin (default) or templateCase into
                                         run/<name>; the name is checked again here.
 39. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
-40. Set the wall and start pressure    Wall density, Young's modulus and Poisson's ratio from
-                                        template/species/<species> (or the command line) into
+40. Set the wall and start pressure    Wall law and its parameters (human: Fung) from
+                                        template/animals/<animal> (or the command line) into
                                         constant/solid/mechanicalProperties, with prestress
                                         yes|no. 0/fluid/p starts at the imaging pressure.
 41. Add the prestress case             template/templatePrestress into run/<name>/prestress,
@@ -129,15 +132,22 @@ CASE ASSEMBLY
                                         30 passes) and copies Fpre to 0/solid/Fpre. Skipped
                                         with --no-prestress.
 42. Point the inlet at its waveform    0/fluid/U reads humanFlow or pigFlow from
-                                        constant/fluid/inletFlow, per --species (asked for;
-                                        default human). endTime is set to --heartbeats
+                                        constant/fluid/inletFlow, per --animal or
+                                        --inlet-flow (a file given by path is copied in
+                                        first). endTime is set to --heartbeats
                                         (asked for; default 3) times the cycle length, the
                                         last time in that file.
 43. Set the core count                 numberOfSubdomains in every decomposeParDict and
                                         --ntasks in run.slurm, per --cores (asked for;
                                         default 16); prints fluid cells per processor.
                                         The Slurm job is named after the run case.
-44. Split the Windkessel by area        Totals Rp, Rd, C (asked for) are divided across the
+44. Split the Windkessel by area        Unless --no-compliance-correction (or --no-prestress),
+                                        writes windkessel/ and the probe pressure table, so
+                                        the case's Allrun measures the 3D wall compliance
+                                        after the prestress (prestress/Allprobe, a step of
+                                        --compliance-pressure-step mmHg) and splits again
+                                        with C less that. Totals Rp, Rd, whole-bed C are
+                                        divided across the
                                         outlets by area^(k/2), k = --flow-split-exponent
                                         (default 2), into 0/fluid/windkesselOutlets, each
                                         starting at the imaging pressure. The

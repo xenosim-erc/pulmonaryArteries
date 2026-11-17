@@ -20,7 +20,7 @@ TEMPLATE_MESH_DIR="$SCRIPT_DIR/template/templateMesh"
 TEMPLATE_CASE_DIR="$SCRIPT_DIR/template/templateCase"
 TEMPLATE_CASE_ROBIN_DIR="$SCRIPT_DIR/template/templateCaseRobin"
 TEMPLATE_PRESTRESS_DIR="$SCRIPT_DIR/template/templatePrestress"
-SPECIES_DIR="$SCRIPT_DIR/template/species"
+ANIMAL_DIR="$SCRIPT_DIR/template/animals"
 RUN_DIR="$SCRIPT_DIR/run"
 
 # Allow an alternate cfMesh installation to be selected on systems where the
@@ -152,11 +152,17 @@ if [[ $# -eq 0 ]]; then
     echo "       [--coupling robin|dirichlet] [--scale-factor VALUE]" >&2
     echo "       [--wk-proximal-resistance VALUE] [--wk-distal-resistance VALUE]" >&2
     echo "       [--wk-compliance VALUE] [--flow-split-exponent VALUE]" >&2
-    echo "       [--species human|porcine] [--heartbeats N] [--cores N]" >&2
+    echo "       [--compliance-pressure-step MMHG] [--no-compliance-correction]" >&2
+    echo "       [--animal human|pig] [--inlet-flow NAME|FILE]" >&2
+    echo "       [--heartbeats N] [--cores N]" >&2
+    echo "       [--wall-model neoHookeanElastic|isotropicFungElastic]" >&2
     echo "       [--wall-density VALUE] [--wall-youngs-modulus VALUE]" >&2
-    echo "       [--wall-poisson-ratio VALUE] [--prestress-pressure MMHG]" >&2
+    echo "       [--wall-poisson-ratio VALUE] [--wall-fung-c VALUE]" >&2
+    echo "       [--wall-fung-a VALUE] [--wall-bulk-modulus VALUE]" >&2
+    echo "       [--prestress-pressure MMHG]" >&2
     echo "       [--no-prestress] [--prestress-tolerance-fraction VALUE]" >&2
-    echo "       [--prestress-max-passes N] [--normal-smoothing-passes N]" >&2
+    echo "       [--prestress-max-passes N] [--prestress-ramp-steps N]" >&2
+    echo "       [--normal-smoothing-passes N]" >&2
     exit 2
 fi
 
@@ -178,7 +184,12 @@ wk_proximal_resistance=""
 wk_distal_resistance=""
 wk_compliance=""
 flow_split_exponent="2"
-species=""
+# The FSI wall carries part of the measured whole-bed compliance; it is taken
+# off the Windkessel compliance unless --no-compliance-correction.
+compliance_correction="yes"
+compliance_pressure_step=""
+animal=""
+inlet_flow=""
 heartbeats=""
 cores=""
 cells_per_radius="3.0"
@@ -191,11 +202,16 @@ thickness_smoothing_passes="10"
 # millimetre out, which is harmless because the thickness field is smooth there.
 # This stays small enough to still catch a units or geometry mismatch.
 max_mapping_distance="1.0"
-# Species defaults (template/species/<species>) fill whichever of these the
-# command line leaves empty.
+# Animal defaults (template/animals/<animal>) fill whichever of these, and of
+# inlet_flow and the wk_ values above, the command line leaves empty; without
+# --animal they are asked for instead.
 wall_density=""
+wall_model=""
 wall_youngs_modulus=""
 wall_poisson_ratio=""
+wall_fung_c=""
+wall_fung_a=""
+wall_bulk_modulus=""
 prestress_pressure=""
 # Prestress: computed by the run case before the FSI run unless --no-prestress.
 # Passes stop once the wall moves less than this fraction of the thinnest
@@ -203,6 +219,9 @@ prestress_pressure=""
 prestress="yes"
 prestress_tolerance_fraction="0.1"
 prestress_max_passes="30"
+# Load steps of the first pass, which ramps the pressure up from zero; from
+# the animal file unless given.
+prestress_ramp_steps=""
 # Smoothing that scales with the wall thickness; empty means "derive from
 # --extrusion-percentage" (see below).
 saddle_dilation=""
@@ -329,16 +348,41 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --flow-split-exponent=*)
             flow_split_exponent="${argument#*=}"
             ;;
-        --species)
+        --animal|--species)
             index=$((index + 1))
             [[ $index -lt ${#arguments[@]} ]] || {
-                echo "Error: --species requires a value" >&2
+                echo "Error: $argument requires a value" >&2
                 exit 2
             }
-            species="${arguments[$index]}"
+            animal="${arguments[$index]}"
             ;;
-        --species=*)
-            species="${argument#*=}"
+        --animal=*|--species=*)
+            animal="${argument#*=}"
+            ;;
+        --inlet-flow)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --inlet-flow requires a value" >&2
+                exit 2
+            }
+            inlet_flow="${arguments[$index]}"
+            ;;
+        --inlet-flow=*)
+            inlet_flow="${argument#*=}"
+            ;;
+        --no-compliance-correction)
+            compliance_correction="no"
+            ;;
+        --compliance-pressure-step)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --compliance-pressure-step requires a value" >&2
+                exit 2
+            }
+            compliance_pressure_step="${arguments[$index]}"
+            ;;
+        --compliance-pressure-step=*)
+            compliance_pressure_step="${argument#*=}"
             ;;
         --heartbeats)
             index=$((index + 1))
@@ -450,6 +494,50 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --wall-poisson-ratio=*)
             wall_poisson_ratio="${argument#*=}"
             ;;
+        --wall-model)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-model requires a value" >&2
+                exit 2
+            }
+            wall_model="${arguments[$index]}"
+            ;;
+        --wall-model=*)
+            wall_model="${argument#*=}"
+            ;;
+        --wall-fung-c)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-fung-c requires a value" >&2
+                exit 2
+            }
+            wall_fung_c="${arguments[$index]}"
+            ;;
+        --wall-fung-c=*)
+            wall_fung_c="${argument#*=}"
+            ;;
+        --wall-fung-a)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-fung-a requires a value" >&2
+                exit 2
+            }
+            wall_fung_a="${arguments[$index]}"
+            ;;
+        --wall-fung-a=*)
+            wall_fung_a="${argument#*=}"
+            ;;
+        --wall-bulk-modulus)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-bulk-modulus requires a value" >&2
+                exit 2
+            }
+            wall_bulk_modulus="${arguments[$index]}"
+            ;;
+        --wall-bulk-modulus=*)
+            wall_bulk_modulus="${argument#*=}"
+            ;;
         --prestress-pressure)
             index=$((index + 1))
             [[ $index -lt ${#arguments[@]} ]] || {
@@ -482,6 +570,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --prestress-max-passes=*)
             prestress_max_passes="${argument#*=}"
+            ;;
+        --prestress-ramp-steps)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --prestress-ramp-steps requires a value" >&2
+                exit 2
+            }
+            prestress_ramp_steps="${arguments[$index]}"
+            ;;
+        --prestress-ramp-steps=*)
+            prestress_ramp_steps="${argument#*=}"
             ;;
         --no-prestress)
             prestress="no"
@@ -627,72 +726,153 @@ fi
 require_positive_number "$scale_factor" --scale-factor
 echo "Mesh scale factor: $scale_factor"
 
-# The inlet flow-rate waveform differs between species. Each template carries
-# one cycle of both in constant/fluid/inletFlow, and the inlet in 0/fluid/U is
-# pointed at the matching file once the run case exists.
-if [[ -z "$species" ]]; then
-    if [[ -t 0 ]]; then
-        read -r -p "Species, human or porcine [human]: " species
-    fi
-    species="${species:-human}"
-fi
-case "${species,,}" in
+# The physiology of the case: the inlet waveform, the wall material, the
+# Windkessel totals and the imaging (prestress) pressure. --animal human|pig
+# sets all of them from template/animals/<animal> without asking. Without
+# --animal each is asked for, offering the human value as the default, and the
+# human values are used when there is no terminal. Either way a value given on
+# the command line takes precedence.
+case "${animal,,}" in
+    "")
+        ;;
     h|human)
-        species="human"
+        animal="human"
         ;;
     p|pig|porcine)
-        species="porcine"
+        animal="pig"
         ;;
     *)
-        echo "Error: --species must be 'human' or 'porcine', not '$species'" >&2
+        echo "Error: --animal must be 'human' or 'pig', not '$animal'" >&2
         exit 2
         ;;
 esac
-
-# Each species has a file of defaults: the inlet waveform, the wall material,
-# the Windkessel totals and the imaging (prestress) pressure. A value given on
-# the command line, or typed at a prompt, takes precedence.
-species_file="$SPECIES_DIR/$species"
-if [[ ! -f "$species_file" ]]; then
-    echo "Error: species defaults not found: $species_file" >&2
+animal_file="$ANIMAL_DIR/${animal:-human}"
+if [[ ! -f "$animal_file" ]]; then
+    echo "Error: animal defaults not found: $animal_file" >&2
     exit 1
 fi
-species_value() {
+animal_placeholder="no"
+animal_value() {
     local value
     value="$(awk -v key="$1" '
         { sub(/#.*/, "") }
         $1 == key && NF >= 2 { print $2; found = 1; exit }
         END { if (!found) exit 1 }
-    ' "$species_file")" || {
-        echo "Error: '$1' is missing from $species_file" >&2
+    ' "$animal_file")" || {
+        echo "Error: '$1' is missing from $animal_file" >&2
         exit 1
     }
     printf '%s\n' "$value"
 }
-inlet_flow_file="$(species_value inletFlow)"
-wall_density="${wall_density:-$(species_value wallDensity)}"
-wall_youngs_modulus="${wall_youngs_modulus:-$(species_value wallYoungsModulus)}"
-wall_poisson_ratio="${wall_poisson_ratio:-$(species_value wallPoissonRatio)}"
-default_wk_proximal_resistance="$(species_value wkProximalResistance)"
-default_wk_distal_resistance="$(species_value wkDistalResistance)"
-default_wk_compliance="$(species_value wkCompliance)"
-default_prestress_pressure="$(species_value prestressPressure)"
-species_placeholder="$(species_value placeholder)"
-require_positive_number "$wall_density" --wall-density
-require_positive_number "$wall_youngs_modulus" --wall-youngs-modulus
-if ! awk -v v="$wall_poisson_ratio" 'BEGIN { exit !(v ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && v + 0 >= 0 && v + 0 < 0.5) }'; then
-    echo "Error: --wall-poisson-ratio must be in [0, 0.5), not '$wall_poisson_ratio'" >&2
-    exit 2
+# set_parameter VARIABLE KEY PROMPT: leave a value from the command line
+# alone; otherwise take KEY from the animal file, asking first (with that as
+# the default) when no animal was given and there is a terminal.
+set_parameter() {
+    local variable="$1" key="$2" prompt="$3" default="" value=""
+    [[ -n "${!variable}" ]] && return 0
+    if [[ -n "$animal" ]]; then
+        default="$(animal_value "$key")"
+    else
+        # Without --animal a key may be missing from the human file (the
+        # Young's modulus once the human wall is Fung); it is then asked for
+        # with no default.
+        default="$(animal_value "$key" 2>/dev/null)" || default=""
+        if [[ -t 0 ]]; then
+            read -r -p "$prompt${default:+ [$default]}: " value
+        fi
+    fi
+    value="${value:-$default}"
+    if [[ -z "$value" ]]; then
+        echo "Error: no value for '$key' in $animal_file; give it on the command line" >&2
+        exit 2
+    fi
+    printf -v "$variable" '%s' "$value"
+}
+set_parameter inlet_flow inletFlow \
+    "Inlet waveform, a file in constant/fluid/inletFlow (humanFlow, pigFlow) or a path"
+set_parameter wall_model wallModel "Wall law, neoHookeanElastic or isotropicFungElastic"
+set_parameter wall_density wallDensity "Wall density, kg/m^3"
+case "$wall_model" in
+    neoHookeanElastic)
+        set_parameter wall_youngs_modulus wallYoungsModulus "Wall Young's modulus, Pa"
+        set_parameter wall_poisson_ratio wallPoissonRatio "Wall Poisson ratio"
+        ;;
+    isotropicFungElastic)
+        set_parameter wall_fung_c wallFungC "Wall Fung stress scale c, Pa"
+        set_parameter wall_fung_a wallFungA "Wall Fung exponent coefficient a"
+        set_parameter wall_bulk_modulus wallBulkModulus "Wall bulk modulus (incompressibility penalty), Pa"
+        ;;
+    *)
+        echo "Error: --wall-model must be neoHookeanElastic or isotropicFungElastic, not '$wall_model'" >&2
+        exit 2
+        ;;
+esac
+set_parameter wk_proximal_resistance wkProximalResistance \
+    "Total proximal resistance Rp, Pa s/m^3"
+set_parameter wk_distal_resistance wkDistalResistance \
+    "Total distal resistance Rd, Pa s/m^3"
+set_parameter wk_compliance wkCompliance \
+    "Total compliance of the pulmonary bed C, m^3/Pa"
+set_parameter prestress_pressure prestressPressure \
+    "Imaging (prestress) pressure, mmHg"
+if [[ "$prestress" == "yes" ]]; then
+    set_parameter prestress_ramp_steps prestressRampSteps \
+        "Load steps for the first prestress pass (ramp from zero)"
 fi
-if [[ "$species_placeholder" == "yes" ]]; then
-    echo "Warning: $species_file is marked as placeholder values; its wall and" >&2
-    echo "Windkessel defaults have not been chosen for this species yet." >&2
+# The 3D wall compliance is measured on the prestressed wall, so it needs the
+# prestress case; with --no-prestress the whole-bed compliance is used as is.
+if [[ "$compliance_correction" == "yes" && "$prestress" == "no" ]]; then
+    echo "Note: --no-prestress also turns off the 3D wall compliance correction," >&2
+    echo "which is measured on the prestressed wall; the outlets get the whole-bed C." >&2
+    compliance_correction="no"
 fi
-if [[ ! -f "$case_template/constant/fluid/inletFlow/$inlet_flow_file" ]]; then
-    echo "Error: inlet flow file not found: $case_template/constant/fluid/inletFlow/$inlet_flow_file" >&2
+if [[ "$compliance_correction" == "yes" ]]; then
+    set_parameter compliance_pressure_step compliancePressureStep \
+        "Pressure step for measuring the 3D wall compliance (a pulse pressure), mmHg"
+fi
+if [[ -n "$animal" ]]; then
+    animal_placeholder="$(animal_value placeholder)"
+fi
+
+# The inlet waveform is one of the files in the template's
+# constant/fluid/inletFlow, named without a path, or any file of the same
+# format given by path, which is copied into the run case. The inlet in
+# 0/fluid/U is pointed at it once the run case exists.
+template_inlet_flow_dir="$case_template/constant/fluid/inletFlow"
+if [[ "$inlet_flow" != */* && -f "$template_inlet_flow_dir/$inlet_flow" ]]; then
+    inlet_flow_source="$template_inlet_flow_dir/$inlet_flow"
+elif [[ -f "$inlet_flow" ]]; then
+    inlet_flow_source="$(cd -- "$(dirname -- "$inlet_flow")" && pwd)/$(basename -- "$inlet_flow")"
+else
+    echo "Error: inlet waveform not found: '$inlet_flow' is neither a file in" >&2
+    echo "$template_inlet_flow_dir nor a file path" >&2
     exit 1
 fi
-echo "Species: $species (inlet flow: $inlet_flow_file)"
+inlet_flow_file="$(basename -- "$inlet_flow_source")"
+if [[ ! "$inlet_flow_file" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "Error: the inlet waveform file name may use only letters, digits, '_', '.' and '-', not '$inlet_flow_file'" >&2
+    exit 2
+fi
+
+require_positive_number "$wall_density" --wall-density
+if [[ "$wall_model" == "neoHookeanElastic" ]]; then
+    require_positive_number "$wall_youngs_modulus" --wall-youngs-modulus
+    if ! awk -v v="$wall_poisson_ratio" 'BEGIN { exit !(v ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && v + 0 >= 0 && v + 0 < 0.5) }'; then
+        echo "Error: --wall-poisson-ratio must be in [0, 0.5), not '$wall_poisson_ratio'" >&2
+        exit 2
+    fi
+    wall_summary="neoHookeanElastic, rho $wall_density kg/m^3, E $wall_youngs_modulus Pa, nu $wall_poisson_ratio"
+else
+    require_positive_number "$wall_fung_c" --wall-fung-c
+    require_positive_number "$wall_fung_a" --wall-fung-a
+    require_positive_number "$wall_bulk_modulus" --wall-bulk-modulus
+    wall_summary="isotropicFungElastic, rho $wall_density kg/m^3, c $wall_fung_c Pa, a $wall_fung_a, K $wall_bulk_modulus Pa"
+fi
+if [[ "$animal_placeholder" == "yes" ]]; then
+    echo "Warning: $animal_file is marked as holding placeholder values; see" >&2
+    echo "the PLACEHOLDER note in it for which have not been chosen yet." >&2
+fi
+echo "Animal: ${animal:-none, values set by hand} (inlet flow: $inlet_flow_source)"
 
 # Run a whole number of cardiac cycles. The cycle length is the last time in
 # the waveform file, so a replaced waveform needs no change here.
@@ -706,7 +886,7 @@ require_positive_number "$heartbeats" --heartbeats
 cycle_period="$(awk '
     $1 == "(" && $2 ~ /^[0-9.eE+-]+$/ { last = $2 }
     END { print last }
-' "$case_template/constant/fluid/inletFlow/$inlet_flow_file")"
+' "$inlet_flow_source")"
 require_positive_number "$cycle_period" "the cycle length in $inlet_flow_file"
 end_time="$(awk -v n="$heartbeats" -v t="$cycle_period" 'BEGIN { printf "%.10g", n * t }')"
 echo "Heartbeats: $heartbeats x ${cycle_period} s, endTime $end_time"
@@ -725,43 +905,20 @@ if [[ ! "$cores" =~ ^[1-9][0-9]*$ ]]; then
 fi
 echo "Cores: $cores"
 
-# Three-element Windkessel totals for the whole distal bed, in SI units. They
-# are split across the outlets by area once the run case exists; see
-# pythonScripts/windkessel_outlets.py. Pressing Enter accepts the defaults.
-if [[ -z "$wk_proximal_resistance" ]]; then
-    if [[ -t 0 ]]; then
-        read -r -p "Total proximal resistance Rp, Pa s/m^3 [${default_wk_proximal_resistance}]: " wk_proximal_resistance
-    fi
-    wk_proximal_resistance="${wk_proximal_resistance:-$default_wk_proximal_resistance}"
-fi
-if [[ -z "$wk_distal_resistance" ]]; then
-    if [[ -t 0 ]]; then
-        read -r -p "Total distal resistance Rd, Pa s/m^3 [${default_wk_distal_resistance}]: " wk_distal_resistance
-    fi
-    wk_distal_resistance="${wk_distal_resistance:-$default_wk_distal_resistance}"
-fi
-if [[ -z "$wk_compliance" ]]; then
-    if [[ -t 0 ]]; then
-        read -r -p "Total compliance C, m^3/Pa [${default_wk_compliance}]: " wk_compliance
-    fi
-    wk_compliance="${wk_compliance:-$default_wk_compliance}"
-fi
+# Three-element Windkessel totals for the whole pulmonary bed, in SI units. The
+# compliance of the 3D wall is taken off C, and the totals are split across
+# the outlets by area, once the meshes exist; see the Windkessel step below
+# and pythonScripts/windkessel_outlets.py.
 require_positive_number "$wk_proximal_resistance" --wk-proximal-resistance
 require_positive_number "$wk_distal_resistance" --wk-distal-resistance
 require_positive_number "$wk_compliance" --wk-compliance
 require_positive_number "$flow_split_exponent" --flow-split-exponent
 echo "Windkessel totals: Rp $wk_proximal_resistance, Rd $wk_distal_resistance, C $wk_compliance"
-echo "Wall: neoHookeanElastic, rho $wall_density kg/m^3, E $wall_youngs_modulus Pa, nu $wall_poisson_ratio"
+echo "Wall: $wall_summary"
 
 # The pressure at the time of imaging. The imaged wall is loaded by it, so the
 # prestress run finds the stress state in equilibrium with it, and the FSI run
 # starts from it: the fluid and every Windkessel outlet are initialised to it.
-if [[ -z "$prestress_pressure" ]]; then
-    if [[ -t 0 ]]; then
-        read -r -p "Imaging (prestress) pressure, mmHg [$default_prestress_pressure]: " prestress_pressure
-    fi
-    prestress_pressure="${prestress_pressure:-$default_prestress_pressure}"
-fi
 if ! awk -v v="$prestress_pressure" 'BEGIN { exit !(v ~ /^[+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$/ && v + 0 >= 0) }'; then
     echo "Error: --prestress-pressure must be a non-negative number of mmHg, not '$prestress_pressure'" >&2
     exit 2
@@ -778,9 +935,20 @@ if [[ "$prestress" == "yes" ]]; then
         echo "Error: prestress needs a positive --prestress-pressure; use --no-prestress for none" >&2
         exit 2
     fi
-    echo "Prestress: $prestress_pressure mmHg ($prestress_pressure_pa Pa), up to $prestress_max_passes passes"
+    # endTime is 1, so the step 1/N must be exact in the 6 decimal places of
+    # the time names: N may only have 2 and 5 as prime factors (4, 5, 8, 10, 16, 20, ...)
+    if [[ ! "$prestress_ramp_steps" =~ ^[1-9][0-9]*$ ]] ||
+       ! awk -v n="$prestress_ramp_steps" 'BEGIN { while (n % 2 == 0) n /= 2; while (n % 5 == 0) n /= 5; exit !(n == 1) }'; then
+        echo "Error: --prestress-ramp-steps must be a whole number with only 2 and 5 as factors (4, 5, 8, 10, 16, 20, ...), not '$prestress_ramp_steps'" >&2
+        exit 2
+    fi
+    prestress_ramp_delta_t="$(awk -v n="$prestress_ramp_steps" 'BEGIN { printf "%.6g", 1 / n }')"
+    echo "Prestress: $prestress_pressure mmHg ($prestress_pressure_pa Pa), first pass in $prestress_ramp_steps load steps, up to $prestress_max_passes passes"
 else
     echo "Prestress: off; the FSI run still starts at $prestress_pressure mmHg"
+fi
+if [[ "$compliance_correction" == "yes" ]]; then
+    require_positive_number "$compliance_pressure_step" --compliance-pressure-step
 fi
 echo "Outlet flow split: Q ~ r^$flow_split_exponent"
 
@@ -793,10 +961,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-ramp-steps|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-ramp-steps=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -857,19 +1025,18 @@ print_settings() {
         "Max refinement levels:" "$maximum_refinement_levels" \
         "Max mapping distance:" "$max_mapping_distance" \
         "Mesh scale factor:" "$scale_factor" \
-        "Species:" "$species ($inlet_flow_file)" \
+        "Animal:" "${animal:-none, values set by hand} (inlet flow: $inlet_flow_source)" \
         "Heartbeats:" "$heartbeats x $cycle_period s (endTime $end_time)" \
         "Cores:" "$cores" \
         "Windkessel Rp [Pa s/m^3]:" "$wk_proximal_resistance" \
         "Windkessel Rd [Pa s/m^3]:" "$wk_distal_resistance" \
-        "Windkessel C [m^3/Pa]:" "$wk_compliance" \
+        "Windkessel C [m^3/Pa]:" "$wk_compliance (whole bed)" \
+        "3D-wall compliance taken off:" "$compliance_correction$( [[ "$compliance_correction" == yes ]] && printf ' (measured at run time, imaging pressure +%s mmHg)' "$compliance_pressure_step")" \
         "Flow-split exponent:" "$flow_split_exponent" \
-        "Wall density [kg/m^3]:" "$wall_density" \
-        "Wall Young's modulus [Pa]:" "$wall_youngs_modulus" \
-        "Wall Poisson ratio:" "$wall_poisson_ratio" \
+        "Wall:" "$wall_summary" \
         "Imaging pressure:" "$prestress_pressure mmHg ($prestress_pressure_pa Pa)" \
-        "Prestress:" "$prestress$( [[ "$prestress" == yes ]] && printf ' (tolerance %s x thinnest wall, max %s passes)' "$prestress_tolerance_fraction" "$prestress_max_passes")" \
-        "Species defaults:" "$species_file$( [[ "$species_placeholder" == yes ]] && printf ' (PLACEHOLDER values)')"
+        "Prestress:" "$prestress$( [[ "$prestress" == yes ]] && printf ' (first pass %s load steps, tolerance %s x thinnest wall, max %s passes)' "$prestress_ramp_steps" "$prestress_tolerance_fraction" "$prestress_max_passes")" \
+        "Defaults file:" "$animal_file$( [[ "$animal_placeholder" == yes ]] && printf ' (PLACEHOLDER values)')"
     if (( ${#passthrough_arguments[@]} > 0 )); then
         printf '%-28s %s\n' "Other geometry options:" "${passthrough_arguments[*]}"
     fi
@@ -1429,25 +1596,51 @@ echo "Created coupled run case in: $run_case"
 echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
 echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
 
-# Wall material and prestress switch. Only the active (uncommented) entries
-# of the first law are changed; each is checked afterwards.
+# Wall material and prestress switch. The whole "mechanical ( ... );" list of
+# the template is replaced by one law, so the chosen law is the only one in the
+# file; the prestress case copies this file, so both runs use the same wall.
 solid_properties="$run_case/constant/solid/mechanicalProperties"
-sed -i -E \
-    -e "0,/^[[:space:]]*rho[[:space:]]+rho[[:space:]]/s/^([[:space:]]*rho[[:space:]]+rho[[:space:]]+\[[^]]*\][[:space:]]+)[^;]+;/\1$wall_density;/" \
-    -e "0,/^[[:space:]]*E[[:space:]]+E[[:space:]]/s/^([[:space:]]*E[[:space:]]+E[[:space:]]+\[[^]]*\][[:space:]]+)[^;]+;/\1$wall_youngs_modulus;/" \
-    -e "0,/^[[:space:]]*nu[[:space:]]+nu[[:space:]]/s/^([[:space:]]*nu[[:space:]]+nu[[:space:]]+\[[^]]*\][[:space:]]+)[^;]+;/\1$wall_poisson_ratio;/" \
-    -e "s/^([[:space:]]*prestress[[:space:]]+)[a-z]+;/\1$prestress;/" \
-    "$solid_properties"
-for check in "rho[[:space:]]+rho[[:space:]]+\[[^]]*\][[:space:]]+$wall_density;" \
-             "E[[:space:]]+E[[:space:]]+\[[^]]*\][[:space:]]+$wall_youngs_modulus;" \
-             "nu[[:space:]]+nu[[:space:]]+\[[^]]*\][[:space:]]+$wall_poisson_ratio;" \
-             "prestress[[:space:]]+$prestress;"; do
+if [[ "$wall_model" == "neoHookeanElastic" ]]; then
+    wall_law_entries="$(printf '%s\n' \
+        "        rho             rho [1 -3 0 0 0 0 0] $wall_density;" \
+        "        E               E [1 -1 -2 0 0 0 0] $wall_youngs_modulus;" \
+        "        nu              nu [0 0 0 0 0 0 0] $wall_poisson_ratio;")"
+else
+    wall_law_entries="$(printf '%s\n' \
+        "        rho             rho [1 -3 0 0 0 0 0] $wall_density;" \
+        "        c               c [1 -1 -2 0 0 0 0] $wall_fung_c;" \
+        "        a               $wall_fung_a;" \
+        "        bulkModulus     bulkModulus [1 -1 -2 0 0 0 0] $wall_bulk_modulus;")"
+fi
+awk -v model="$wall_model" -v entries="$wall_law_entries" -v prestress="$prestress" '
+    /^mechanical[[:space:]]*$/ {
+        print "mechanical"
+        print "("
+        print "    artery"
+        print "    {"
+        print "        type            " model ";"
+        print entries
+        print "    }"
+        print ");"
+        skipping = 1; replaced = 1
+        next
+    }
+    skipping { if ($0 ~ /^\);/) skipping = 0; next }
+    /^[[:space:]]*prestress[[:space:]]+[a-z]+;/ { sub(/prestress[[:space:]]+[a-z]+;/, "prestress       " prestress ";") }
+    { print }
+    END { if (!replaced || skipping) exit 1 }
+' "$solid_properties" > "$solid_properties.tmp" || {
+    echo "Error: could not find the mechanical ( ... ); list in $solid_properties" >&2
+    exit 1
+}
+mv "$solid_properties.tmp" "$solid_properties"
+for check in "type[[:space:]]+$wall_model;" "prestress[[:space:]]+$prestress;"; do
     if ! grep -Eq "^[[:space:]]*$check" "$solid_properties"; then
         echo "Error: could not set '$check' in $solid_properties" >&2
         exit 1
     fi
 done
-echo "Wall material set in: $solid_properties (prestress $prestress)"
+echo "Wall material set in: $solid_properties ($wall_summary; prestress $prestress)"
 
 # The FSI run starts at the imaging pressure, so the prestressed wall starts
 # in equilibrium. The fluid pressure is kinematic (p/rho).
@@ -1480,11 +1673,16 @@ if [[ "$prestress" == "yes" ]]; then
     echo "Created prestress case in: $run_case/prestress"
 fi
 
-# Point the inlet at the waveform for the chosen species.
+# Point the inlet at the waveform for the chosen animal, copying it in first
+# when it was given by path.
+if [[ "$inlet_flow_source" != "$template_inlet_flow_dir/$inlet_flow_file" ]]; then
+    cp -- "$inlet_flow_source" "$run_case/constant/fluid/inletFlow/$inlet_flow_file"
+    echo "Copied inlet waveform to: $run_case/constant/fluid/inletFlow/$inlet_flow_file"
+fi
 run_velocity="$run_case/0/fluid/U"
-sed -i -E "s#(file[[:space:]]+\"<constant>/fluid/inletFlow/)[A-Za-z]+(\";)#\1$inlet_flow_file\2#" \
+sed -i -E "s#(file[[:space:]]+\"<constant>/fluid/inletFlow/)[^\"]+(\";)#\1$inlet_flow_file\2#" \
     "$run_velocity"
-if ! grep -q "<constant>/fluid/inletFlow/$inlet_flow_file\";" "$run_velocity"; then
+if ! grep -qF "<constant>/fluid/inletFlow/$inlet_flow_file\";" "$run_velocity"; then
     echo "Error: could not point the inlet in $run_velocity at $inlet_flow_file" >&2
     exit 1
 fi
@@ -1536,6 +1734,40 @@ echo "Splitting the Windkessel totals across the outlets..."
     --initial-pressure "$prestress_pressure_pa" \
     | tee "$run_case/log.windkesselOutlets"
 
+# The compliance C above is measured for the whole pulmonary bed, which
+# includes the arteries that the FSI wall now models; their share should come
+# off C so it is not counted twice. It depends on the wall's material law and
+# prestressed state, so it is measured when the case runs: after the prestress,
+# the case's Allrun runs prestress/Allprobe, which steps the inner-wall
+# pressure from the imaging pressure up by a pulse pressure and measures the
+# lumen volume change, then splits the outlets again with C less that. This
+# sets up both steps: the probe's pressure table and, in windkessel/, the
+# totals, the outlet areas and a copy of the split script. Without
+# windkessel/settings the case runs with the whole-bed split written above.
+if [[ "$compliance_correction" == "yes" ]]; then
+    compliance_pressure_step_pa="$(awk -v p="$compliance_pressure_step" 'BEGIN { printf "%.6g", p * 133.322387415 }')"
+    probe_top_pressure_pa="$(awk -v a="$prestress_pressure_pa" -v b="$compliance_pressure_step_pa" 'BEGIN { printf "%.6g", a + b }')"
+    printf '(\n    (0 %s)\n    (0.25 %s)\n    (1 %s)\n)\n' \
+        "$prestress_pressure_pa" "$prestress_pressure_pa" "$probe_top_pressure_pa" \
+        > "$run_case/prestress/constant/timeVsPressure.probe"
+    mkdir -p "$run_case/windkessel"
+    cp -- "$WINDKESSEL_SCRIPT" "$run_case/windkessel/windkessel_outlets.py"
+    cp -- "$profiles_csv" "$run_case/windkessel/outletAreas.csv"
+    {
+        echo "# Written by meshing.sh; read by Allrun to split the Windkessel across the"
+        echo "# outlets once prestress/Allprobe has measured the 3D wall compliance."
+        echo "proximalResistance=$wk_proximal_resistance   # Pa s/m^3, total"
+        echo "distalResistance=$wk_distal_resistance   # Pa s/m^3, total"
+        echo "wholeBedCompliance=$wk_compliance   # m^3/Pa, before the 3D wall is taken off"
+        echo "flowSplitExponent=$flow_split_exponent"
+        echo "initialPressure=$prestress_pressure_pa   # Pa"
+    } > "$run_case/windkessel/settings"
+    compliance_note="whole bed $wk_compliance m^3/Pa for now; Allrun takes off the 3D wall's, measured from $prestress_pressure mmHg to +$compliance_pressure_step mmHg"
+    echo "Outlet compliance: $compliance_note"
+else
+    compliance_note="whole bed $wk_compliance m^3/Pa, 3D wall not taken off"
+fi
+
 # Prestress stopping rule: the passes stop once the wall moves less than a
 # fraction of its thinnest point. The thickness is in STL units, as is the
 # solid mesh before scaling, so it is scaled to the run-case units here.
@@ -1547,9 +1779,11 @@ if [[ "$prestress" == "yes" ]]; then
         'BEGIN { printf "%.4g", f * t * s }')"
     prestress_allrun="$run_case/prestress/Allrun"
     sed -i -E -e "s/^tolerance=.*/tolerance=$prestress_tolerance/" \
-        -e "s/^maxPasses=.*/maxPasses=$prestress_max_passes/" "$prestress_allrun"
+        -e "s/^maxPasses=.*/maxPasses=$prestress_max_passes/" \
+        -e "s/^rampDeltaT=.*/rampDeltaT=$prestress_ramp_delta_t/" "$prestress_allrun"
     if ! grep -qx "tolerance=$prestress_tolerance" "$prestress_allrun" ||
-       ! grep -qx "maxPasses=$prestress_max_passes" "$prestress_allrun"; then
+       ! grep -qx "maxPasses=$prestress_max_passes" "$prestress_allrun" ||
+       ! grep -qx "rampDeltaT=$prestress_ramp_delta_t" "$prestress_allrun"; then
         echo "Error: could not set the stopping rule in $prestress_allrun" >&2
         exit 1
     fi
@@ -1591,6 +1825,7 @@ params_file="$run_case/meshing.params"
     echo
     print_settings
     printf '%-28s %s\n' "Fluid cells:" "${fluid_cells:-unknown}"
+    printf '%-28s %s\n' "Outlet compliance total:" "$compliance_note"
     if [[ "$prestress" == "yes" ]]; then
         printf '%-28s %s\n' "Prestress tolerance:" "$prestress_tolerance (maxMag(D), run-case units)"
     fi
