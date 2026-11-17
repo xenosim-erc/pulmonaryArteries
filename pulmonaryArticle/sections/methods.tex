@@ -124,28 +124,74 @@ The arterial wall was modelled as a hyperelastic solid, solved in a total Lagran
 \end{equation}
 where $\vect{d}$ is the displacement, $\tens{P}$ the first Piola--Kirchhoff stress, $\tens{F}$ the deformation gradient and $W$ the strain-energy function of the wall.
 When prestress is included (\cref{sec:prestress}), $\tens{F}$ in \cref{eq:solid} is replaced by $\tens{F}\tens{F}_{\mathrm{pre}}$.
-\todo{Constitutive law not yet chosen. Give $W$ for the final law (isotropic or anisotropic, e.g.\ fibre-reinforced) and justify it for pulmonary arterial tissue. The current templates use a compressible neo-Hookean law, $\boldsymbol{\sigma} = \frac{\mu}{J}\mathrm{dev}(\bar{\tens{B}}) + \frac{\kappa}{2}\frac{J^2-1}{J}\tens{I}$; if that is kept, state it here and check it against the solids4foam version used.}
-\todo{Material parameters for both species, with sources (\cref{tab:params}); they are coupled to the choice of wall thickness $\varepsilon$.}
+The wall of both species was represented by an isotropic, nearly incompressible Fung-type exponential law \citep{fung1993biomechanics},
+\begin{equation}
+  W = \frac{c}{2}\left[\exp\!\left(a\,\mathrm{tr}\,\bar{\tens{E}}^{2}\right) - 1\right]
+    + \frac{\kappa}{4}\left(J^{2} - 1 - 2\ln J\right),
+  \label{eq:fung}
+\end{equation}
+with the isochoric Green strain $\bar{\tens{E}} = \tfrac12\left(\bar{\tens{F}}^{\mathsf{T}}\bar{\tens{F}} - \tens{I}\right)$, $\bar{\tens{F}} = J^{-1/3}\tens{F}$, where $J = \det\tens{F}$, $c$ scales the stress, $a$ sets the rate at which the wall stiffens with strain, and $\kappa$ is a bulk modulus that penalises changes of volume (\texttt{isotropicFungElastic} in \solidsFoam).
+At small strain \cref{eq:fung} reduces to linear elasticity with shear modulus $\mu = ca/2$.
+The bulk modulus was $\kappa = \SI{1}{\mega\pascal}$ for both species, which gives a small-strain Poisson's ratio of 0.486 for the human wall and 0.494 for the porcine wall.
 The model parameters for each species are listed in \cref{tab:params}.
+
+\paragraph{Wall parameters from planar biaxial tests}
+The constants $c$ and $a$ were derived from planar biaxial tests of supravalvular pulmonary artery tissue: human tissue from \citet{azadaniRegionalMechanicalProperties2012} and porcine tissue from \citet{matthews2010comparison}, both from the same laboratory and testing protocol.
+Each study reports a two-dimensional (membrane) Fung law in the in-plane Green strains,
+\begin{equation}
+  W_m = \frac{c_m}{2}\left[\exp(Q) - 1\right],
+  \qquad
+  Q = c_{\theta\theta}E_{\theta\theta}^{2} + 2c_{\theta z}E_{\theta\theta}E_{zz} + c_{zz}E_{zz}^{2},
+  \label{eq:fung-membrane}
+\end{equation}
+where $\theta$ and $z$ are the circumferential and axial directions (\cref{tab:fung}).
+These constants cannot be used directly in \cref{eq:fung}.
+The membrane law describes the in-plane response of a thin sheet, with the through-thickness strain eliminated by incompressibility; in the three-dimensional law the radial strain $E_{rr} = \tfrac12\left(\lambda_\theta^{-2}\lambda_z^{-2} - 1\right)$ enters the exponent alongside the in-plane strains, so no value of $a$ reproduces $Q$.
+Instead, $c$ and $a$ were chosen so that \cref{eq:fung} reproduces the stresses of the membrane law under the conditions of the tests: an incompressible sheet ($J = 1$) in plane stress ($S_{rr} = 0$, which determines the hydrostatic pressure), stretched at biaxial ratios $\lambda_\theta : \lambda_z$ of 1:1, 1:0.75 and 0.75:1 up to a stretch of 1.3.
+This limit, a Green strain of about 0.35, is the upper end of the physiological strain range of pulmonary artery tissue \citep{matthews2010comparison}.
+The second Piola--Kirchhoff stresses were matched by least squares, with the residuals of each loading ratio and direction normalised by their peak stress.
+
+An isotropic law has a single stiffness for every direction, so it can follow an anisotropic membrane fit in one direction only.
+The circumferential coefficient was therefore used for both in-plane directions, $c_{zz} = c_{\theta\theta}$, before fitting, with $c_m$ and $c_{\theta z}$ as reported.
+The circumferential response was preserved because it governs the distension of the artery.
+For a thin-walled tube under pressure $p$, the circumferential stress $pr/h$ is twice the axial stress of a closed tube, and in the present models the ends of the wall are fixed, which restrains its axial stretch.
+The change in lumen area, and with it the compliance of the wall and its coupling to the flow, is therefore set almost entirely by the circumferential stretch, and the axial response plays a minor role.
+For the human wall the choice has no effect, because the reported fit is already isotropic in its normal coefficients ($c_{\theta\theta} = c_{zz}$).
+The porcine fit is anisotropic, with $c_{\theta\theta}$ about 1.5 times $c_{zz}$.
+Fitting \cref{eq:fung} to the circumferential stresses of the reported porcine constants alone gives $c = \SI{11.9}{\kilo\pascal}$ and $a = 2.03$, close to the values used.
+The fitted laws reproduce the membrane stresses to within an RMS error of \SI{0.8}{\percent} (human) and \SI{2.4}{\percent} (porcine) of the peak stress (\cref{tab:fung}).
+The porcine wall is softer at small strain ($\mu = \SI{12.0}{\kilo\pascal}$ against \SI{27.7}{\kilo\pascal}) and stiffens much less with strain ($a = 2.15$ against 7.05).
+The fit is reproduced by \texttt{scripts/fung\_fit.py}.
 
 \begin{table}[tb]
   \centering
-  \caption{Species-specific model parameters.
-    \todo{The constitutive law, all wall parameters and the porcine Windkessel totals are still to be chosen; the values shown are those currently in the case templates.}}
+  \caption{Membrane Fung fits of supravalvular pulmonary artery tissue (\cref{eq:fung-membrane}) and the isotropic three-dimensional law fitted to them (\cref{eq:fung}). Before fitting, $c_{zz}$ was set to $c_{\theta\theta}$. RMS is the error in the membrane stresses, as a percentage of the peak stress. Membrane fits: human \citep{azadaniRegionalMechanicalProperties2012}, porcine \citep{matthews2010comparison}.}
+  \label{tab:fung}
+  \small
+  \input{tables/fung.tex}
+\end{table}
+
+\todo{Ex vivo against in vivo stiffness. Thin-tube estimates with these laws give an area distensibility of about 1.2 (human) and 1.5 (porcine) \%/mmHg over the pulse, below in vivo values of about 4 \%/mmHg in both species (MRI, K\"orperich et al.\ 2023; sonomicrometry in pigs, Vanden Eynden et al.\ 2019). Compare with the simulated distension and discuss: marker-based strain in the source tests, donor age (human donors about 50 years, pigs 6--9 months), loss of smooth-muscle tone ex vivo. Grip-based studies give a softer human wall (Dionne et al.\ 2016) and a porcine wall similar to that used here (Pillalamarri et al.\ 2021).}
+
+\begin{table}[tb]
+  \centering
+  \caption{Species-specific model parameters. The compliance $C$ is that of the whole pulmonary bed, before the compliance of the three-dimensional wall is removed.
+    \todo{Source of the wall density.}}
   \label{tab:params}
   \begin{tabular}{llrr}
     \toprule
     Parameter & Unit & Human & Porcine \\
     \midrule
-    Constitutive law                   & --                              & \todo{neo-Hookean}  & \todo{neo-Hookean} \\
-    Wall density, $\rho_s$             & \si{\kilo\gram\per\cubic\metre} & \todo{1200}         & \todo{1200} \\
-    Young's modulus, $E$               & \si{\kilo\pascal}               & \todo{300}          & \todo{300} \\
-    Poisson's ratio, $\nu_s$           & --                              & \todo{0.45}         & \todo{0.45} \\
+    Constitutive law                   & --                              & \multicolumn{2}{c}{isotropic Fung, \cref{eq:fung}} \\
+    Wall density, $\rho_s$             & \si{\kilo\gram\per\cubic\metre} & 1200                & 1200 \\
+    Stress scale, $c$                  & \si{\kilo\pascal}               & 7.87                & 11.2 \\
+    Exponent coefficient, $a$          & --                              & 7.05                & 2.15 \\
+    Bulk modulus, $\kappa$             & \si{\mega\pascal}               & 1                   & 1 \\
     Wall thickness, $\varepsilon$      & \% of diameter                  & 8                   & 8 \\
-    Proximal resistance, $R_p$         & \si{\pascal\second\per\cubic\metre} & \num{3.3e6}     & \todo{\num{3.3e6}} \\
-    Distal resistance, $R_d$           & \si{\pascal\second\per\cubic\metre} & \num{2e7}       & \todo{\num{2e7}} \\
-    Compliance, $C$                    & \si{\cubic\metre\per\pascal}    & \num{3.5e-8}        & \todo{\num{3.5e-8}} \\
-    Imaging pressure, $p_0$            & \si{mmHg}                       & 10                  & \todo{10} \\
+    Proximal resistance, $R_p$         & \si{\pascal\second\per\cubic\metre} & \num{3.3e6}     & \num{4.44e6} \\
+    Distal resistance, $R_d$           & \si{\pascal\second\per\cubic\metre} & \num{2e7}       & \num{2.52e7} \\
+    Compliance, $C$                    & \si{\cubic\metre\per\pascal}    & \num{3.14e-8}       & \num{3.81e-8} \\
+    Imaging pressure, $p_0$            & \si{mmHg}                       & 10                  & 15 \\
     Cardiac period, $T$                & \si{\second}                    & 0.86                & 0.66 \\
     Mean inlet flow, $\bar{Q}$         & \si{\litre\per\minute}          & 3.95                & 5.26 \\
     \bottomrule
@@ -177,7 +223,7 @@ Total values of the proximal resistance $R_p$, distal resistance $R_d$ and compl
   \label{eq:wk-split}
 \end{equation}
 so that the outlets combined in parallel reproduce the totals and every outlet has the same time constant $R_d C$.
-\todo{Source of the human Windkessel totals. Porcine totals not yet chosen: choose them and give sources, and state whether either species' values were tuned to reproduce target pulmonary pressures (systolic/diastolic/mean).}
+\todo{Sources of the Windkessel totals: human from the healthy volunteers of Lungu et al.\ (2014) ($R_p$, $R_d$ read from their Fig.~4; $C$ = 4.19 mL/mmHg from the text); porcine from the sham group of Garc\'ia-Lunar et al.\ (2024) ($R_p + R_d$ = PVR, 3.7 WU; $C$ = 5.08 mL/mmHg), with $R_p$ = 15\% of the total from $Z_c/Z_0$ in healthy pigs (P\'erez del Villar et al.\ 2019). Describe the removal of the three-dimensional wall's compliance from $C$ (measured after the prestress by stepping the pressure from $p_0$ by a pulse pressure, 12 mmHg human, 11 mmHg porcine) before the split of \cref{eq:wk-split}.}
 
 \paragraph{Solid}
 The solid was fixed at the inlet and outlet end rings.

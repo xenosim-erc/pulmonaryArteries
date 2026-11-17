@@ -1,0 +1,67 @@
+# Default parameters for pig geometries, read by meshing.sh when
+# --animal pig is chosen. One "name value" pair per line; anything after
+# '#' is ignored. Each value can be overridden on the meshing.sh command line
+# with the option named beside it.
+
+# Inlet waveform in constant/fluid/inletFlow of the case templates
+inletFlow           pigFlow     #            --inlet-flow
+
+# Arterial wall (constant/solid/mechanicalProperties): the isotropic Fung law
+#     W = 0.5 c (exp(a tr(Ebar & Ebar)) - 1) + U(J)
+# fitted, as for the human wall, under plane stress and incompressibility over
+# biaxial stretch ratios 1:1, 1:0.75 and 0.75:1 up to 1.3, to the membrane Fung
+# fit of the porcine supravalvular pulmonary artery of Matthews et al. (2010),
+# Ann Thorac Surg 89:1981, doi:10.1016/j.athoracsur.2010.03.002, Table 2:
+# c = 50.52 kPa, ctt = 0.708, cLL = 0.476, ctL = 0.19 (equibiaxial tests,
+# 10 hearts). That fit is anisotropic, which an isotropic law cannot follow;
+# the circumferential coefficient is taken as correct (cLL = ctt = 0.708, ctL
+# as reported), giving an RMS stress error under 3%. Fitting the
+# circumferential stresses of the reported constants alone gives nearly the
+# same law (c 11.9 kPa, a 2.03). The small-strain shear modulus is
+# c a / 2 = 12.0 kPa. Bulk modulus as for the human wall.
+wallModel           isotropicFungElastic #   --wall-model
+wallDensity         1200        # kg/m^3     --wall-density
+wallFungC           11.2e3      # Pa         --wall-fung-c
+wallFungA           2.15        # -          --wall-fung-a
+wallBulkModulus     1e6         # Pa         --wall-bulk-modulus
+
+# Three-element Windkessel totals for the whole pulmonary bed, from the sham
+# (control, M0) group of Garcia-Lunar et al. (2024), Basic Res Cardiol,
+# doi:10.1007/s00395-024-01041-5: Yucatan minipigs, n = 9, 75 kg, medians.
+# Total resistance = their PVR, 3.7 WU = 2.96e7 Pa s/m^3. With the outlets
+# draining to 0 Pa and the pigFlow mean of 5.26 L/min this gives a mean
+# pressure of about 20 mmHg, against their measured 21 mmHg.
+# Rp is 15% of the total, the characteristic impedance as a fraction of the
+# input resistance in healthy pigs (Zc/Z0 = 135/925 dyn s/cm^5; Perez del
+# Villar et al. (2019), J Physiol, doi:10.1113/JP278050); Garcia-Lunar give
+# no split. C is their PA compliance, 5.08 mL/mmHg, for the whole bed: when
+# the case runs, the compliance of the 3D wall is measured and taken off C
+# (see compliancePressureStep).
+wkProximalResistance 4.44e6     # Pa s/m^3   --wk-proximal-resistance
+wkDistalResistance   2.52e7     # Pa s/m^3   --wk-distal-resistance
+wkCompliance         3.81e-8    # m^3/Pa     --wk-compliance
+
+# Pressure at the time of imaging: the prestress load, and the initial fluid
+# and Windkessel pressure of the fluid-solid interaction run. Taken as the
+# diastolic pressure of the Garcia-Lunar et al. (2024) sham pigs, 15 mmHg
+# (median), so that the scanned wall is at equilibrium at the bottom of the
+# pressure range the Windkessel gives.
+prestressPressure   15          # mmHg       --prestress-pressure
+
+# Load steps of the first prestress pass, which ramps the pressure up from
+# zero on the scanned geometry. The pig wall is softer and its imaging
+# pressure higher than the human's, so that pass deforms it much further
+# (about 28% hoop stretch for a wall 8% of the diameter, against 8% for the
+# human wall at 10 mmHg; thin-tube estimate) and
+# is given twice the steps. Only 2 and 5 may be factors (4, 5, 8, 10, 16, ...)
+prestressRampSteps  8           #            --prestress-ramp-steps
+
+# Pressure step over which the 3D wall compliance is measured, from the
+# imaging pressure up: a pulse pressure, so the result is the secant
+# compliance over the pulse like the whole-bed value. Garcia-Lunar et al.
+# (2024) sham pigs: systolic 26, diastolic 15 mmHg (medians), so 15 -> 26 mmHg
+compliancePressureStep 11       # mmHg       --compliance-pressure-step
+
+# Set to "yes" while any value above is a placeholder rather than a value
+# chosen for this animal; meshing.sh then warns
+placeholder         no

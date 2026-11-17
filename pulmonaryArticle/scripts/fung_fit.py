@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Fit the isotropic three-dimensional Fung law to planar biaxial (membrane) Fung fits.
+
+The wall law is solids4foam's isotropicFungElastic,
+
+    W = c/2 (exp(a tr(Ebar^2)) - 1) + U(J),
+
+and the published fits are membrane laws,
+
+    W_m = c_m/2 (exp(Q) - 1),  Q = ctt Ett^2 + 2 ctz Ett Ezz + czz Ezz^2,
+
+in the two in-plane Green strains. The 3D law is evaluated under the
+conditions of the tests (plane stress, incompressible) and c and a are chosen
+by least squares to reproduce the membrane second Piola-Kirchhoff stresses
+over biaxial stretch ratios 1:1, 1:0.75 and 0.75:1 up to a stretch of 1.3.
+An isotropic law cannot follow an anisotropic fit, so the circumferential
+coefficient is used for both directions (czz = ctt) before fitting.
+
+Writes tables/fung.tex and prints the fit errors and checks.
+
+Usage: python3 scripts/fung_fit.py   (from pulmonaryArticle/)
+"""
+
+from pathlib import Path
+
+import numpy as np
+from scipy.optimize import least_squares
+
+STRETCH_MAX = 1.3
+PROTOCOLS = {"1:1": (1.0, 1.0), "1:0.75": (1.0, 0.75), "0.75:1": (0.75, 1.0)}
+BULK_MODULUS_KPA = 1e3
+
+# Membrane Fung fits of the supravalvular pulmonary artery: c_m in kPa
+SOURCES = {
+    "Human": dict(cite="azadaniRegionalMechanicalProperties2012",
+                  c=15.0, ctt=6.0, czz=6.0, ctz=1.8),
+    "Porcine": dict(cite="matthews2010comparison",
+                    c=50.52, ctt=0.708, czz=0.476, ctz=0.19),
+}
+
+
+def membrane_stress(lt, lz, c, ctt, czz, ctz):
+    """Second Piola-Kirchhoff (S_tt, S_zz) of the membrane Fung law, kPa."""
+    et, ez = 0.5 * (lt**2 - 1), 0.5 * (lz**2 - 1)
+    q = ctt * et**2 + czz * ez**2 + 2 * ctz * et * ez
+    return c * np.exp(q) * np.array([ctt * et + ctz * ez, czz * ez + ctz * et])
+
+
+def isotropic_stress(lt, lz, c, a):
+    """(S_tt, S_zz) of the incompressible isotropic 3D Fung law in plane stress, kPa."""
+    lr = 1 / (lt * lz)
+    e = 0.5 * (np.array([lt, lz, lr]) ** 2 - 1)
+    g = c * a * np.exp(a * np.sum(e**2))
+    p = g * e[2] * lr**2  # Lagrange multiplier from S_rr = 0
+    return np.array([g * e[0] - p / lt**2, g * e[1] - p / lz**2])
+
+
+def fit(membrane):
+    points = [(name, 1 + r[0] * s, 1 + r[1] * s)
+              for name, r in PROTOCOLS.items()
+              for s in np.linspace(0.01, STRETCH_MAX - 1, 30)]
+    target = {pt: membrane(pt[1], pt[2]) for pt in points}
+    scale = {name: np.abs(np.array([target[pt] for pt in points if pt[0] == name])).max(axis=0)
+             for name in PROTOCOLS}
+
+    def residual(x):
+        return np.concatenate([(isotropic_stress(pt[1], pt[2], *x) - target[pt]) / scale[pt[0]]
+                               for pt in points])
+
+    best = min((least_squares(residual, start, bounds=([1e-3, 1e-3], [1e4, 1e2]))
+                for start in [(1, 1), (10, 5), (50, 1), (5, 10)]), key=lambda r: r.cost)
+    rms = 100 * np.sqrt(np.mean(best.fun**2))
+    return best.x, rms
+
+
+def circumferential_only(membrane):
+    """Fit to the circumferential stresses alone, as a check on the czz = ctt choice."""
+    points = [(1 + r[0] * s, 1 + r[1] * s) for r in PROTOCOLS.values()
+              for s in np.linspace(0.01, STRETCH_MAX - 1, 30)]
+    res = lambda x: np.array([isotropic_stress(lt, lz, *x)[0] - membrane(lt, lz)[0] for lt, lz in points])
+    return least_squares(res, (10, 2), bounds=([1e-3, 1e-3], [1e4, 1e2])).x
+
+
+def main():
+    rows = []
+    for species, s in SOURCES.items():
+        used = dict(c=s["c"], ctt=s["ctt"], czz=s["ctt"], ctz=s["ctz"])  # czz := ctt
+        (c, a), rms = fit(lambda lt, lz: membrane_stress(lt, lz, **used))
+        c, a = float(f"{c:.3g}"), float(f"{a:.3g}")  # the values given to the cases
+        mu = c * a / 2
+        nu = (3 * BULK_MODULUS_KPA - 2 * mu) / (2 * (3 * BULK_MODULUS_KPA + mu))
+        check = circumferential_only(lambda lt, lz: membrane_stress(lt, lz, s["c"], s["ctt"], s["czz"], s["ctz"]))
+        print(f"{species}: c = {c:.3g} kPa, a = {a:.3g}, mu = {mu:.3g} kPa, nu0 = {nu:.3f}, "
+              f"RMS error {rms:.1f}% of the peak stress; circumferential-only fit of the "
+              f"reported constants: c = {check[0]:.3g} kPa, a = {check[1]:.3g}")
+        rows.append((species, s, c, a, mu, rms))
+
+    lines = [
+        r"\begin{tabular}{lrrrrrrrr}",
+        r"  \toprule",
+        r"  & \multicolumn{4}{c}{Membrane fit} & \multicolumn{4}{c}{Three-dimensional law} \\",
+        r"  \cmidrule(lr){2-5}\cmidrule(lr){6-9}",
+        r"  & $c_m$ (\si{\kilo\pascal}) & $c_{\theta\theta}$ & $c_{zz}$ & $c_{\theta z}$"
+        r" & $c$ (\si{\kilo\pascal}) & $a$ & $\mu$ (\si{\kilo\pascal}) & RMS (\%) \\",
+        r"  \midrule",
+    ]
+    for species, s, c, a, mu, rms in rows:
+        lines.append(f"  {species} & {s['c']:g} & {s['ctt']:g} & {s['czz']:g} & {s['ctz']:g}"
+                     f" & {c:g} & {a:g} & {mu:.1f} & {rms:.1f} \\\\")
+    lines += [r"  \bottomrule", r"\end{tabular}"]
+    out = Path(__file__).resolve().parent.parent / "tables" / "fung.tex"
+    out.write_text("% Generated by scripts/fung_fit.py; do not edit by hand.\n" + "\n".join(lines) + "\n")
+    print(f"Wrote {out}")
+
+
+if __name__ == "__main__":
+    main()
