@@ -21,5 +21,22 @@ source /usr/lib/openfoam/openfoam2412/etc/bashrc
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 #export OMP_NUM_THREADS=10
 
+# Bind each MPI rank to one of the cores Slurm gave this job, in order. The
+# cluster does not confine jobs to their cores (no cgroups), so unbound ranks
+# drift onto cores busy with other jobs and run at half speed, holding back
+# every other rank. CPU_IDs from scontrol are the OS core numbers here (one
+# thread per core), which Open MPI's cpu list takes as given.
+CPU_LIST=$(scontrol show job -d "$SLURM_JOB_ID" |
+    sed -n 's/.*CPU_IDs=\([^ ]*\).*/\1/p' |
+    head -n 1)
+if [ -n "$CPU_LIST" ]
+then
+    export OMPI_MCA_hwloc_base_binding_policy=cpu-list:ordered
+    export OMPI_MCA_hwloc_base_cpu_list="$CPU_LIST"
+    echo "Binding MPI ranks to cores $CPU_LIST"
+else
+    echo "Could not read this job's cores from scontrol; MPI ranks are not bound" >&2
+fi
+
 # Execute the run script
 ./Allrun &> log.Allrun
