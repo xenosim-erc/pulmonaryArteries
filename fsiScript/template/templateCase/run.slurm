@@ -38,5 +38,14 @@ else
     echo "Could not read this job's cores from scontrol; MPI ranks are not bound" >&2
 fi
 
+# Report the cores each MPI rank may run on, sorted by rank: with the binding
+# above, each rank should have one core, all different, together CPU_LIST
+mpirun -np "$SLURM_NTASKS" python3 -c '
+import os
+rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
+cpus = sorted(os.sched_getaffinity(0))
+print(f"Rank {rank}: CPUs {cpus}", flush=True)
+' | sort -n -k2
+
 # Execute the run script
 ./Allrun &> log.Allrun
