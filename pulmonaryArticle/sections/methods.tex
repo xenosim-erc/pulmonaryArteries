@@ -186,7 +186,7 @@ The porcine wall is softer at small strain ($\mu = \SI{12.0}{\kilo\pascal}$ agai
     Wall density, $\rho_s$             & \si{\kilo\gram\per\cubic\metre} & 1200                & 1200 \\
     Stress scale, $c$                  & \si{\kilo\pascal}               & 7.87                & 11.2 \\
     Exponent coefficient, $a$          & --                              & 7.05                & 2.15 \\
-    Bulk modulus, $\kappa$             & \si{\mega\pascal}               & 1.38                & 0.598 \\
+    Poisson's ratio, $\nu$             & --                              & 0.49                & 0.49 \\
     Wall thickness, $\varepsilon$      & \% of diameter                  & 8                   & 8 \\
     Proximal resistance, $R_p$         & \si{\pascal\second\per\cubic\metre} & \num{3.3e6}     & \num{4.44e6} \\
     Distal resistance, $R_d$           & \si{\pascal\second\per\cubic\metre} & \num{2e7}       & \num{2.52e7} \\
@@ -203,7 +203,12 @@ The porcine wall is softer at small strain ($\mu = \SI{12.0}{\kilo\pascal}$ agai
 
 \paragraph{Inlet}
 A time-varying volumetric flow rate was prescribed at the inlet, using one representative waveform per species: the human waveform has a period of \SI{0.86}{\second} and a mean flow of \SI{3.95}{\litre\per\minute}, and the porcine waveform a period of \SI{0.66}{\second} and a mean flow of \SI{5.26}{\litre\per\minute}.
-\todo{Sources of both waveforms; whether they are scaled to each subject (e.g.\ by body mass or inlet area) or applied unchanged; velocity profile at the inlet.}
+These waveforms are obtained from the mean curves of \citet{yevtushenkoSimulationBasedComparisonHuman2025}.
+A principal component analysis was used to generate these waveforms.
+In the original paper, these were matched according to the known heart rate and cardiac output of the patients.
+We did not have this information so the mean has been considered for all geometries.
+
+\todo{Should we scale the waveforms. Shoudl we ask the original authors for the waveforms.}
 \todo{Figure fig:inlet-waveforms: the two inlet waveforms.}
 
 \paragraph{Outlets}
@@ -223,12 +228,23 @@ Total values of the proximal resistance $R_p$, distal resistance $R_d$ and compl
   \label{eq:wk-split}
 \end{equation}
 so that the outlets combined in parallel reproduce the totals and every outlet has the same time constant $R_d C$.
-\todo{Sources of the Windkessel totals: human from the healthy volunteers of Lungu et al.\ (2014) ($R_p$, $R_d$ read from their Fig.~4; $C$ = 4.19 mL/mmHg from the text); porcine from the sham group of Garc\'ia-Lunar et al.\ (2024) ($R_p + R_d$ = PVR, 3.7 WU; $C$ = 5.08 mL/mmHg), with $R_p$ = 15\% of the total from $Z_c/Z_0$ in healthy pigs (P\'erez del Villar et al.\ 2019). Describe the removal of the three-dimensional wall's compliance from $C$ (measured after the prestress by stepping the pressure from $p_0$ by a pulse pressure, 12 mmHg human, 11 mmHg porcine) before the split of \cref{eq:wk-split}.}
 
+The human windkessel parameters are those of healthy volunteers from \citet{lunguMRIModelbasedNoninvasive2014}.
+$R_p$ and $R_d$ are read from Fig.4 and $C$ = 4.19 mL/mmHg can be found in the text.
+The porcine values are from the sham group of \citet{garcia-lunar2024metabolic} ($R_p + R_d$ = PVR, 3.7 WU; $C$ = 5.08 mL/mmHg), with $R_p$ = 15\% of the total from $Z_c/Z_0$ in healthy pigs \citep{perezdelvillar2019natural}.
+These values are for the total downstream network, hence it is important to take into account the compliance of the part of the network which has been modelled before dividing them according to area rule discussed above.
+This physically modelled compliance is estimated at the end of the prestressing process \cref{sec:prestress}.
+In a solid-only case, the pressure is stepped up from the assumed diastolic pressure $p_0$ by 12 mmHg for humans and 11 mmHg for pigs.
+The physical compliance is then estimated according to \cref{eq:physComp} and subtracted from the total value.
+\begin{equation}
+  C_\mathrm{phys} = \frac{\Delta V}{\Delta P}
+  \label{eq:physComp}
+\end{equation}
+where $C_\mathrm{phys}$ is the modelled compliance, $\Delta V$ is the change in volume and $\Delta P$ is the applied pulse pressure.    
 \paragraph{Solid}
 The solid was fixed at the inlet and outlet end rings.
 The outer wall was traction-free, and the inner wall was loaded by the fluid through the coupling conditions of \cref{sec:fsi}.
-\todo{Discuss the absence of perivascular tissue support as a limitation, or add an elastic support to the outer wall.}
+\todo{Discuss the absence of perivascular tissue support as a limitation, or add an elastic support to the outer wall or look into spring-dashpotting}
 
 % ---------------------------------------------------------------------------
 \subsection{Prestress}\label{sec:prestress}
