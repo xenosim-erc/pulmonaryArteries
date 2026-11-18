@@ -53,6 +53,9 @@ fileHandler     uncollated;
 
 functions
 {
+    // Flow rate through each lung and each outlet, written by meshing.sh
+    #includeIfPresent "lungFlows"
+
     // displacement
     // {
     //     type            solidPointDisplacement;

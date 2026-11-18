@@ -16,6 +16,8 @@ GAUSS_SCRIPT="$SCRIPT_DIR/pythonScripts/Gauss.py"
 EMPTY_PATCH_SCRIPT="$SCRIPT_DIR/pythonScripts/add_empty_boundary_patch.py"
 REFINEMENT_SCRIPT="$SCRIPT_DIR/pythonScripts/add_refinements.py"
 WINDKESSEL_SCRIPT="$SCRIPT_DIR/pythonScripts/windkessel_outlets.py"
+LUNG_SIDES_SCRIPT="$SCRIPT_DIR/pythonScripts/lung_sides.py"
+LUNG_FLOW_SETUP_SCRIPT="$SCRIPT_DIR/pythonScripts/lung_flow_setup.py"
 TEMPLATE_MESH_DIR="$SCRIPT_DIR/template/templateMesh"
 TEMPLATE_CASE_DIR="$SCRIPT_DIR/template/templateCase"
 TEMPLATE_CASE_ROBIN_DIR="$SCRIPT_DIR/template/templateCaseRobin"
@@ -81,6 +83,12 @@ if [[ ! -f "$REFINEMENT_SCRIPT" ]]; then
     exit 1
 fi
 
+for lung_script in "$LUNG_SIDES_SCRIPT" "$LUNG_FLOW_SETUP_SCRIPT"; do
+    if [[ ! -f "$lung_script" ]]; then
+        echo "Error: lung-side script not found: $lung_script" >&2
+        exit 1
+    fi
+done
 if [[ ! -f "$WINDKESSEL_SCRIPT" ]]; then
     echo "Error: Windkessel split script not found: $WINDKESSEL_SCRIPT" >&2
     exit 1
@@ -153,6 +161,7 @@ if [[ $# -eq 0 ]]; then
     echo "       [--wk-proximal-resistance VALUE] [--wk-distal-resistance VALUE]" >&2
     echo "       [--wk-compliance VALUE] [--flow-split-exponent VALUE]" >&2
     echo "       [--compliance-pressure-step MMHG] [--no-compliance-correction]" >&2
+    echo "       [--left-axis +x|-x|+y|-y|+z|-z] [--lung-sides FILE]" >&2
     echo "       [--animal human|pig] [--inlet-flow NAME|FILE]" >&2
     echo "       [--heartbeats N] [--cores N]" >&2
     echo "       [--wall-model neoHookeanElastic|isotropicFungElastic]" >&2
@@ -187,6 +196,10 @@ flow_split_exponent="2"
 # The FSI wall carries part of the measured whole-bed compliance; it is taken
 # off the Windkessel compliance unless --no-compliance-correction.
 compliance_correction="yes"
+# Lung of each outlet: automatic from the centerlines, with the patient's left
+# along --left-axis (+x in DICOM LPS coordinates), or from a "name,side" file.
+left_axis="+x"
+lung_sides_file=""
 compliance_pressure_step=""
 animal=""
 inlet_flow=""
@@ -372,6 +385,28 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --no-compliance-correction)
             compliance_correction="no"
+            ;;
+        --left-axis)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --left-axis requires a value" >&2
+                exit 2
+            }
+            left_axis="${arguments[$index]}"
+            ;;
+        --left-axis=*)
+            left_axis="${argument#*=}"
+            ;;
+        --lung-sides)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --lung-sides requires a value" >&2
+                exit 2
+            }
+            lung_sides_file="${arguments[$index]}"
+            ;;
+        --lung-sides=*)
+            lung_sides_file="${argument#*=}"
             ;;
         --compliance-pressure-step)
             index=$((index + 1))
@@ -943,6 +978,23 @@ if [[ "$compliance_correction" == "yes" ]]; then
     require_positive_number "$compliance_pressure_step" --compliance-pressure-step
 fi
 echo "Outlet flow split: Q ~ r^$flow_split_exponent"
+case "$left_axis" in
+    +x|-x|+y|-y|+z|-z) ;;
+    *)
+        echo "Error: --left-axis must be one of +x -x +y -y +z -z, not '$left_axis'" >&2
+        exit 2
+        ;;
+esac
+if [[ -n "$lung_sides_file" ]]; then
+    if [[ ! -f "$lung_sides_file" ]]; then
+        echo "Error: --lung-sides file not found: $lung_sides_file" >&2
+        exit 1
+    fi
+    lung_sides_file="$(cd -- "$(dirname -- "$lung_sides_file")" && pwd)/$(basename -- "$lung_sides_file")"
+    echo "Lung sides: from $lung_sides_file"
+else
+    echo "Lung sides: automatic, patient left along $left_axis"
+fi
 
 # Both stages need the Gaussian and extrusion options: Gauss.py turns them into
 # the wall thickness, and pulmonary_centerlines.py uses the same numbers to set
@@ -953,10 +1005,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -1025,6 +1077,7 @@ print_settings() {
         "Windkessel C [m^3/Pa]:" "$wk_compliance (whole bed)" \
         "3D-wall compliance taken off:" "$compliance_correction$( [[ "$compliance_correction" == yes ]] && printf ' (measured at run time, imaging pressure +%s mmHg)' "$compliance_pressure_step")" \
         "Flow-split exponent:" "$flow_split_exponent" \
+        "Lung sides:" "${lung_sides_file:-automatic, patient left along $left_axis}" \
         "Wall:" "$wall_summary" \
         "Imaging pressure:" "$prestress_pressure mmHg ($prestress_pressure_pa Pa)" \
         "Prestress:" "$prestress$( [[ "$prestress" == yes ]] && printf ' (ramp %s mmHg per pass, tolerance %s x thinnest wall, max %s passes at full pressure)' "$prestress_pressure_step" "$prestress_tolerance_fraction" "$prestress_max_passes")" \
@@ -1260,6 +1313,34 @@ centerline_csv="$output_dir/${output_prefix}_centerlines.csv"
 
 env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
     "$FSI_PYTHON" "$CSV_SCRIPT" "$centerline_vtp" "$centerline_csv"
+
+# Assign each outlet to the left or right lung (pythonScripts/lung_sides.py):
+# the outlets are clustered into two groups by how far their centerlines run
+# together, which part at the main pulmonary artery bifurcation, and the group
+# further along --left-axis is the left. A broken centerline falls back to the
+# largest gap between outlets, with a warning; --lung-sides gives the sides by
+# hand. Only a geometry with fewer than two outlets is left without groups.
+lung_sides_csv="$output_dir/${output_prefix}_sides.csv"
+lung_sides_arguments=(--left-axis "$left_axis")
+[[ -n "$lung_sides_file" ]] && lung_sides_arguments=(--override "$lung_sides_file")
+lung_sides_status=0
+env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
+    "$FSI_PYTHON" "$LUNG_SIDES_SCRIPT" "$centerline_csv" "$profiles_csv" "$lung_sides_csv" \
+    "${lung_sides_arguments[@]}" | tee "$output_dir/log.lungSides" || lung_sides_status=$?
+case "$lung_sides_status" in
+    0)
+        lung_sides="yes"
+        ;;
+    3)
+        lung_sides="no"
+        echo "Warning: no lung groups; the lung flow split will not be recorded." >&2
+        echo "Give the sides with --lung-sides FILE (name,side per outlet) to add them." >&2
+        ;;
+    *)
+        echo "Error: lung side assignment failed; see $output_dir/log.lungSides" >&2
+        exit 1
+        ;;
+esac
 
 # Map the smoothed local diameter and percentage-based wall thickness to
 # the uncapped inner surface for subsequent extrusion or solid-wall steps.
@@ -1588,6 +1669,16 @@ echo "Created coupled run case in: $run_case"
 echo "Copied fluid mesh to: $run_case/constant/fluid/polyMesh"
 echo "Copied solid mesh to: $run_case/constant/solid/polyMesh"
 
+# Lung groups: the outlet patches join the patch group LPA or RPA, and
+# system/lungFlows (included by system/controlDict) records the flow rate
+# through each lung and each outlet at every time step.
+if [[ "$lung_sides" == "yes" ]]; then
+    cp -- "$lung_sides_csv" "$run_case/lungSides.csv"
+    env -u PYTHONPATH -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
+        "$FSI_PYTHON" "$LUNG_FLOW_SETUP_SCRIPT" "$run_case/lungSides.csv" \
+        "$run_case/constant/fluid/polyMesh/boundary" "$run_case/system/lungFlows"
+fi
+
 # Wall material and prestress switch. The whole "mechanical ( ... );" list of
 # the template is replaced by one law, so the chosen law is the only one in the
 # file; the prestress case copies this file, so both runs use the same wall.
@@ -1816,6 +1907,12 @@ params_file="$run_case/meshing.params"
     print_settings
     printf '%-28s %s\n' "Fluid cells:" "${fluid_cells:-unknown}"
     printf '%-28s %s\n' "Outlet compliance total:" "$compliance_note"
+    if [[ "$lung_sides" == "yes" ]]; then
+        printf '%-28s %s\n' "Lung outlets:" \
+            "$(awk -F, 'NR > 1 { s[$2] = s[$2] " " $1 } END { printf "LPA%s; RPA%s", s["L"], s["R"] }' "$run_case/lungSides.csv")"
+    else
+        printf '%-28s %s\n' "Lung outlets:" "not assigned (no clean split; see log.lungSides)"
+    fi
     if [[ "$prestress" == "yes" ]]; then
         printf '%-28s %s\n' "Prestress tolerance:" "$prestress_tolerance (maxMag(D), run-case units)"
     fi

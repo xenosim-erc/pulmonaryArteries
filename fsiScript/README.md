@@ -394,6 +394,51 @@ parallel (`1 / sum(1/R_i)`) and the compliances summed. It compares the results
 with the requested totals and stops if any differs by more than 1e-4. The
 comparison table is printed and saved in the run case's `log.windkesselOutlets`.
 
+### Lung flow split
+
+`meshing.sh` assigns every outlet to the left or right lung
+(`pythonScripts/lung_sides.py`). The centerline to each outlet starts at the
+inlet, and the outlets are clustered by how far their centerlines run
+together. The pair that stays together longest is joined first, until two
+groups remain. They part at the bifurcation of the main pulmonary artery. A
+branch leaving the main artery just before the bifurcation joins the side it
+stays with longest. The group further along `--left-axis` (default `+x`) is
+the left lung. This assumes the surfaces keep DICOM (LPS) patient
+coordinates, in which `+x` is the patient's left; it held for every cohort
+geometry, checked against the anatomy.
+
+A centerline that jumps by more than three local radii has left the vessel.
+The topology then cannot be trusted, so the outlets are split instead at the
+largest gap between their centroids along `--left-axis`, with a warning. This
+gap rule agreed with the topology on all 72 cohort geometries whose
+centerlines are intact. The 3 with broken centerlines (human_010,
+porcine_006 and porcine_035) also skip the main pulmonary artery between the
+inlet and the jump. Their wall thickness there comes from the wrong vessel,
+so check those meshes.
+
+`--lung-sides FILE` gives the sides by hand: a CSV of `name,side` (side `L` or
+`R`) listing every outlet. The assignment is printed and saved as
+`log.lungSides` in the meshing directory and `lungSides.csv` in the run case.
+It also prints each lung's share of the outlet area, which is the flow split
+the area-based Windkessel split would give on its own.
+
+In the run case:
+
+- each outlet patch joins the patch group `LPA` or `RPA` in
+  `constant/fluid/polyMesh/boundary`;
+- `system/lungFlows`, included by `system/controlDict`, records the flow rate
+  through each lung and each outlet at every time step, in
+  `postProcessing/fluid/{LPAFlow,RPAFlow,outlet<N>Flow}`.
+
+After a run, `pythonScripts/lung_flow_split.py RUN_CASE...` reports for the
+last complete cycle:
+
+- the mean flow of each lung;
+- the left fraction, both mean and at peak systole;
+- the left fraction that the outlet boundary conditions alone would give.
+
+`--csv FILE` collects the results of several cases into one table.
+
 ### Animal defaults
 
 The parameters that differ between animals are kept in one file per animal,

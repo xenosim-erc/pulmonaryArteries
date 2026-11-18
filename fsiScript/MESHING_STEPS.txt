@@ -88,6 +88,12 @@ FLUID MESH
 WALL THICKNESS
 --------------
 29. Export centerlines to CSV          centerlines_to_csv.py; per-branch arc length and radius.
+29a. Assign outlets to the lungs       lung_sides.py: cluster the outlets by how far their
+                                        centerlines run together (two groups, parting at the
+                                        main PA bifurcation); the side further along
+                                        --left-axis (+x, LPS) is left. Broken centerline:
+                                        split at the largest gap instead, with a warning.
+                                        --lung-sides FILE gives the sides by hand.
 30. Map thickness to the surface       Gauss.py: smooth diameter along each branch, take the
                                        requested percentage, smooth it over the surface.
 31. Project onto the fluid wall        mapExtrudeDistance writes 0/WallThickness; points beyond
@@ -120,6 +126,9 @@ CASE ASSEMBLY
 38. Copy the case template              templateCaseRobin (default) or templateCase into
                                         run/<name>; the name is checked again here.
 39. Copy both meshes                    Fluid polyMesh to constant/fluid, solid to constant/solid.
+39a. Group the lung outlets            lung_flow_setup.py: outlet patches join patch group LPA
+                                        or RPA; system/lungFlows (included by controlDict)
+                                        records the flow of each lung and outlet every step.
 40. Set the wall and start pressure    Wall law and its parameters (human: Fung) from
                                         template/animals/<animal> (or the command line) into
                                         constant/solid/mechanicalProperties, with prestress
