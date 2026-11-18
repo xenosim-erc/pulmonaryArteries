@@ -18,12 +18,13 @@ inletFlow           pigFlow     #            --inlet-flow
 # as reported), giving an RMS stress error under 3%. Fitting the
 # circumferential stresses of the reported constants alone gives nearly the
 # same law (c 11.9 kPa, a 2.03). The small-strain shear modulus is
-# c a / 2 = 12.0 kPa. Bulk modulus as for the human wall.
+# mu = c a / 2 = 12.0 kPa. The bulk modulus is set, as for the human wall,
+# for a small-strain Poisson's ratio of 0.49: K = 49.7 mu.
 wallModel           isotropicFungElastic #   --wall-model
 wallDensity         1200        # kg/m^3     --wall-density
 wallFungC           11.2e3      # Pa         --wall-fung-c
 wallFungA           2.15        # -          --wall-fung-a
-wallBulkModulus     1e6         # Pa         --wall-bulk-modulus
+wallBulkModulus     5.98e5      # Pa         --wall-bulk-modulus
 
 # Three-element Windkessel totals for the whole pulmonary bed, from the sham
 # (control, M0) group of Garcia-Lunar et al. (2024), Basic Res Cardiol,
@@ -47,15 +48,6 @@ wkCompliance         3.81e-8    # m^3/Pa     --wk-compliance
 # (median), so that the scanned wall is at equilibrium at the bottom of the
 # pressure range the Windkessel gives.
 prestressPressure   15          # mmHg       --prestress-pressure
-
-# Load steps of the first prestress pass, which ramps the pressure up from
-# zero on the scanned geometry. The pig wall is softer and its imaging
-# pressure higher than the human's, so that pass deforms it much further
-# (about 28% hoop stretch for a wall 8% of the diameter, against 8% for the
-# human wall at 10 mmHg; thin-tube estimate) and is given four times the
-# steps (8 stalled in the first step on p16). Only 2 and 5 may be factors
-# (4, 5, 8, 10, 16, ...)
-prestressRampSteps  16          #            --prestress-ramp-steps
 
 # Pressure step over which the 3D wall compliance is measured, from the
 # imaging pressure up: a pulse pressure, so the result is the secant

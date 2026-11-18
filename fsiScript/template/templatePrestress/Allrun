@@ -13,15 +13,18 @@
 #      later time directories, so the next pass starts again from the imaged
 #      geometry with zero displacement.
 #
-# Pass 1 runs with "prestress no" and ramps the pressure up from zero. Later
-# passes run with "prestress yes" and apply the full pressure in one step: the
-# wall already carries the Fpre stresses, which balance it, and ramping it
-# again would first deflate the prestressed wall, which the solver does not
-# converge through.
+# Every pass is a single load step. The pressure ramps up across the passes,
+# by pressureStep per pass, until it reaches targetPressure: pass k applies
+# min(k pressureStep, targetPressure). Pass 1 runs with "prestress no" on the
+# stress-free imaged wall; later passes run with "prestress yes", so each
+# solve only adds the pressure step to a wall already balanced by Fpre at the
+# previous pressure. The pressure never falls, so the prestressed wall is
+# never deflated, which the solver does not converge through.
 #
-# Passes stop once the maximum displacement of a run, maxMag(D) in
-# prestressHistory, is below the tolerance, or after maxPasses. meshing.sh
-# sets both below, and the pressure in constant/timeVsPressure.{ramp,full}.
+# Once the pressure is at targetPressure, passes continue until the maximum
+# displacement of a run, maxMag(D) in prestressHistory, is below the
+# tolerance, or after maxPasses passes at that pressure. meshing.sh sets all
+# four below.
 # The final Fpre is copied to ../0/solid/Fpre for the fluid-solid interaction
 # run, which uses the same material: constant/mechanicalProperties is copied
 # from ../constant/solid/mechanicalProperties, and the solid mesh from
@@ -45,8 +48,13 @@ source solids4FoamScripts.sh
 # Stop when maxMag(D) of a run is below this, in metres (set by meshing.sh)
 tolerance=1e-5
 
-# Give up after this many passes (set by meshing.sh)
+# Give up after this many passes at the full pressure (set by meshing.sh)
 maxPasses=30
+
+# Imaging pressure on innerWall, and the rise per pass of the ramp up to it,
+# in Pa (set by meshing.sh)
+targetPressure=1333.22
+pressureStep=133.322
 
 runParallel=yes
 
@@ -104,27 +112,31 @@ setPrestress()
     mv "$file.tmp" "$file"
 }
 
-# Inner-wall pressure, read by 0/D from constant/timeVsPressure
+# Inner-wall pressure in Pa, read by 0/D from constant/timeVsPressure; held
+# constant over the single load step of a pass
 setPressure()
 {
-    cp "constant/timeVsPressure.$1" constant/timeVsPressure
+    printf '(\n    (0 %s)\n    (1 %s)\n)\n' "$1" "$1" > constant/timeVsPressure
 }
 
-# Time step in system/controlDict (endTime 1): pass 1 ramps the pressure over
-# 1/rampDeltaT load steps (set by meshing.sh, per animal), later passes hold
-# it in a single step
-rampDeltaT=0.25
-fullDeltaT=1
-
-setDeltaT()
+# Pressure of pass $1: min(pass x pressureStep, targetPressure). A product
+# within 0.1% of a step of the target is taken as the target, so the rounding
+# of the two Pa values cannot add a pass at almost the full pressure
+passPressure()
 {
-    local file=system/controlDict
-    sed -E "s/^([[:space:]]*deltaT[[:space:]]+)[^;]+;/\1$1;/" \
-        "$file" > "$file.tmp"
-    mv "$file.tmp" "$file"
+    awk -v k="$1" -v s="$pressureStep" -v t="$targetPressure" \
+        'BEGIN { p = k * s; if (p >= t - 1e-3 * s) p = t; printf "%.6g", p }'
 }
 
-trap 'setDeltaT "$rampDeltaT"' EXIT
+# Passes below the full pressure: ceil(targetPressure / pressureStep) - 1
+rampPasses="$(awk -v s="$pressureStep" -v t="$targetPressure" \
+    'BEGIN { n = t / s; c = int(n); if (n - c > 1e-3) c++; print (c > 1 ? c - 1 : 0) }')"
+totalPasses=$((rampPasses + maxPasses))
+
+# One load step per pass: endTime 1 in system/controlDict
+sed -E "s/^([[:space:]]*deltaT[[:space:]]+)[^;]+;/\11;/" \
+    system/controlDict > system/controlDict.tmp
+mv system/controlDict.tmp system/controlDict
 
 # Run an application in serial or parallel, logging to log.<app>.p<pass>
 run()
@@ -156,17 +168,14 @@ then
     solids4Foam::runApplication -o decomposePar -force
 fi
 
+echo "Prestress: $rampPasses ramp pass(es) of $pressureStep Pa, then up to $maxPasses at $targetPressure Pa"
+
 converged=no
-for pass in $(seq 1 "$maxPasses")
+fullPasses=0
+for pass in $(seq 1 "$totalPasses")
 do
-    if [ "$pass" -eq 1 ]
-    then
-        setPressure ramp
-        setDeltaT "$rampDeltaT"
-    else
-        setPressure full
-        setDeltaT "$fullDeltaT"
-    fi
+    pressure="$(passPressure "$pass")"
+    setPressure "$pressure"
 
     run "$pass" solids4Foam
     if [ "$runParallel" = yes ]
@@ -183,7 +192,14 @@ do
     fi
 
     maxD="$(latestMaxD)"
-    echo "Prestress pass $pass of at most $maxPasses: maxMag(D) $maxD m (tolerance $tolerance m)"
+    if [ "$pass" -le "$rampPasses" ]
+    then
+        echo "Prestress pass $pass (ramp, $pressure of $targetPressure Pa): maxMag(D) $maxD m"
+        continue
+    fi
+
+    fullPasses=$((fullPasses + 1))
+    echo "Prestress pass $pass ($fullPasses of at most $maxPasses at $targetPressure Pa): maxMag(D) $maxD m (tolerance $tolerance m)"
     if awk -v d="$maxD" -v t="$tolerance" 'BEGIN { exit !(d != "" && d + 0 < t + 0) }'
     then
         converged=yes
@@ -199,16 +215,16 @@ fi
 
 cp 0/Fpre ../0/solid/Fpre
 
-echo "Prestress history (maxMag(D), rmsMag(D) and maxMag(F-I) should fall with each pass):"
+echo "Prestress history (maxMag(D), rmsMag(D) and maxMag(F-I) should fall with each pass at the full pressure):"
 cat prestressHistory
 
 if [ "$converged" = yes ]
 then
-    echo "Prestress converged after $pass pass(es)."
+    echo "Prestress converged after $pass pass(es), $fullPasses at the full pressure."
 else
-    echo "WARNING: prestress did not reach maxMag(D) < $tolerance m in $maxPasses passes." >&2
+    echo "WARNING: prestress did not reach maxMag(D) < $tolerance m in $maxPasses passes at the full pressure." >&2
     echo "The latest Fpre was still copied to ../0/solid/Fpre; check prestressHistory." >&2
-    echo "PRESTRESS NOT CONVERGED after $maxPasses passes: maxMag(D) $maxD m, tolerance $tolerance m" \
+    echo "PRESTRESS NOT CONVERGED after $maxPasses passes at $targetPressure Pa: maxMag(D) $maxD m, tolerance $tolerance m" \
         > PRESTRESS_NOT_CONVERGED
 fi
 

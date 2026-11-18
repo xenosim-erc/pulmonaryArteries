@@ -13,13 +13,15 @@ inletFlow           humanFlow   #            --inlet-flow
 # (membrane) Fung fit of human pulmonary artery of Azadani et al. (2012),
 # J Heart Valve Dis 21:527 (c = 15 kPa, ctt = czz = 6, ctz = 1.8): stretch
 # ratios 1:1, 1:0.75 and 0.75:1 up to 1.3, RMS stress error under 1%. The
-# small-strain shear modulus is c a / 2 = 27.7 kPa. The bulk modulus is a
-# near-incompressibility penalty (small-strain Poisson's ratio about 0.486).
+# small-strain shear modulus is mu = c a / 2 = 27.7 kPa. The bulk modulus is a
+# near-incompressibility penalty, set for a small-strain Poisson's ratio of
+# 0.49: K = 2 mu (1 + nu) / (3 (1 - 2 nu)) = 49.7 mu. Nearer 0.5 the solid
+# solve needs many more linear iterations.
 wallModel           isotropicFungElastic #   --wall-model
 wallDensity         1200        # kg/m^3     --wall-density
 wallFungC           7.87e3      # Pa         --wall-fung-c
 wallFungA           7.05        # -          --wall-fung-a
-wallBulkModulus     1e6         # Pa         --wall-bulk-modulus
+wallBulkModulus     1.38e6      # Pa         --wall-bulk-modulus
 
 # Three-element Windkessel totals for the whole pulmonary bed, healthy
 # volunteers of Lungu et al. (2014), J Biomech 47:2941,
@@ -37,10 +39,6 @@ wkCompliance         3.14e-8    # m^3/Pa     --wk-compliance
 # 4-12 mmHg (normal ranges in the ERS practical recommendations on right heart
 # catheterisation parameters).
 prestressPressure   10          # mmHg       --prestress-pressure
-
-# Load steps of the first prestress pass, which ramps the pressure up from
-# zero on the scanned geometry. Only 2 and 5 may be factors (4, 5, 8, 10, ...)
-prestressRampSteps  4           #            --prestress-ramp-steps
 
 # Pressure step over which the 3D wall compliance is measured, from the
 # imaging (diastolic) pressure up: a pulse pressure, so the result is the

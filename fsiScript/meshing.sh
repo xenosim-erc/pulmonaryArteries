@@ -161,7 +161,7 @@ if [[ $# -eq 0 ]]; then
     echo "       [--wall-fung-a VALUE] [--wall-bulk-modulus VALUE]" >&2
     echo "       [--prestress-pressure MMHG]" >&2
     echo "       [--no-prestress] [--prestress-tolerance-fraction VALUE]" >&2
-    echo "       [--prestress-max-passes N] [--prestress-ramp-steps N]" >&2
+    echo "       [--prestress-max-passes N] [--prestress-pressure-step MMHG]" >&2
     echo "       [--normal-smoothing-passes N]" >&2
     exit 2
 fi
@@ -215,13 +215,13 @@ wall_bulk_modulus=""
 prestress_pressure=""
 # Prestress: computed by the run case before the FSI run unless --no-prestress.
 # Passes stop once the wall moves less than this fraction of the thinnest
-# wall, or after the maximum number of passes.
+# wall, or after the maximum number of passes at the full pressure. Each pass
+# is one load step, and the pressure ramps up by the step per pass (mmHg)
+# until it reaches the imaging pressure.
 prestress="yes"
 prestress_tolerance_fraction="0.1"
 prestress_max_passes="30"
-# Load steps of the first pass, which ramps the pressure up from zero; from
-# the animal file unless given.
-prestress_ramp_steps=""
+prestress_pressure_step="1"
 # Smoothing that scales with the wall thickness; empty means "derive from
 # --extrusion-percentage" (see below).
 saddle_dilation=""
@@ -571,16 +571,16 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --prestress-max-passes=*)
             prestress_max_passes="${argument#*=}"
             ;;
-        --prestress-ramp-steps)
+        --prestress-pressure-step)
             index=$((index + 1))
             [[ $index -lt ${#arguments[@]} ]] || {
-                echo "Error: --prestress-ramp-steps requires a value" >&2
+                echo "Error: --prestress-pressure-step requires a value" >&2
                 exit 2
             }
-            prestress_ramp_steps="${arguments[$index]}"
+            prestress_pressure_step="${arguments[$index]}"
             ;;
-        --prestress-ramp-steps=*)
-            prestress_ramp_steps="${argument#*=}"
+        --prestress-pressure-step=*)
+            prestress_pressure_step="${argument#*=}"
             ;;
         --no-prestress)
             prestress="no"
@@ -815,10 +815,6 @@ set_parameter wk_compliance wkCompliance \
     "Total compliance of the pulmonary bed C, m^3/Pa"
 set_parameter prestress_pressure prestressPressure \
     "Imaging (prestress) pressure, mmHg"
-if [[ "$prestress" == "yes" ]]; then
-    set_parameter prestress_ramp_steps prestressRampSteps \
-        "Load steps for the first prestress pass (ramp from zero)"
-fi
 # The 3D wall compliance is measured on the prestressed wall, so it needs the
 # prestress case; with --no-prestress the whole-bed compliance is used as is.
 if [[ "$compliance_correction" == "yes" && "$prestress" == "no" ]]; then
@@ -935,15 +931,11 @@ if [[ "$prestress" == "yes" ]]; then
         echo "Error: prestress needs a positive --prestress-pressure; use --no-prestress for none" >&2
         exit 2
     fi
-    # endTime is 1, so the step 1/N must be exact in the 6 decimal places of
-    # the time names: N may only have 2 and 5 as prime factors (4, 5, 8, 10, 16, 20, ...)
-    if [[ ! "$prestress_ramp_steps" =~ ^[1-9][0-9]*$ ]] ||
-       ! awk -v n="$prestress_ramp_steps" 'BEGIN { while (n % 2 == 0) n /= 2; while (n % 5 == 0) n /= 5; exit !(n == 1) }'; then
-        echo "Error: --prestress-ramp-steps must be a whole number with only 2 and 5 as factors (4, 5, 8, 10, 16, 20, ...), not '$prestress_ramp_steps'" >&2
-        exit 2
-    fi
-    prestress_ramp_delta_t="$(awk -v n="$prestress_ramp_steps" 'BEGIN { printf "%.6g", 1 / n }')"
-    echo "Prestress: $prestress_pressure mmHg ($prestress_pressure_pa Pa), first pass in $prestress_ramp_steps load steps, up to $prestress_max_passes passes"
+    require_positive_number "$prestress_pressure_step" --prestress-pressure-step
+    prestress_pressure_step_pa="$(awk -v p="$prestress_pressure_step" 'BEGIN { printf "%.6g", p * 133.322387415 }')"
+    prestress_ramp_passes="$(awk -v s="$prestress_pressure_step" -v t="$prestress_pressure" \
+        'BEGIN { n = t / s; c = int(n); if (n - c > 1e-3) c++; print (c > 1 ? c - 1 : 0) }')"
+    echo "Prestress: $prestress_pressure mmHg ($prestress_pressure_pa Pa), one load step per pass: $prestress_ramp_passes ramp passes of $prestress_pressure_step mmHg, then up to $prestress_max_passes at full pressure"
 else
     echo "Prestress: off; the FSI run still starts at $prestress_pressure mmHg"
 fi
@@ -961,10 +953,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-ramp-steps|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-ramp-steps=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -1035,7 +1027,7 @@ print_settings() {
         "Flow-split exponent:" "$flow_split_exponent" \
         "Wall:" "$wall_summary" \
         "Imaging pressure:" "$prestress_pressure mmHg ($prestress_pressure_pa Pa)" \
-        "Prestress:" "$prestress$( [[ "$prestress" == yes ]] && printf ' (first pass %s load steps, tolerance %s x thinnest wall, max %s passes)' "$prestress_ramp_steps" "$prestress_tolerance_fraction" "$prestress_max_passes")" \
+        "Prestress:" "$prestress$( [[ "$prestress" == yes ]] && printf ' (ramp %s mmHg per pass, tolerance %s x thinnest wall, max %s passes at full pressure)' "$prestress_pressure_step" "$prestress_tolerance_fraction" "$prestress_max_passes")" \
         "Defaults file:" "$animal_file$( [[ "$animal_placeholder" == yes ]] && printf ' (PLACEHOLDER values)')"
     if (( ${#passthrough_arguments[@]} > 0 )); then
         printf '%-28s %s\n' "Other geometry options:" "${passthrough_arguments[*]}"
@@ -1658,18 +1650,14 @@ fi
 echo "Initial fluid pressure: $prestress_pressure_pa Pa ($initial_kinematic_pressure m^2/s^2)"
 
 # The prestress case. Its Allrun takes the wall material and the solid mesh
-# from the run case each time it runs, so only the load and stopping rule are
-# set here; the tolerance is set once the wall thickness is known, below.
+# from the run case each time it runs; its pressures and stopping rule are set
+# below, once the wall thickness (for the tolerance) is known.
 if [[ "$prestress" == "yes" ]]; then
     if [[ ! -d "$TEMPLATE_PRESTRESS_DIR" ]]; then
         echo "Error: prestress template not found: $TEMPLATE_PRESTRESS_DIR" >&2
         exit 1
     fi
     cp -a "$TEMPLATE_PRESTRESS_DIR" "$run_case/prestress"
-    printf '(\n    (0 0)\n    (1 %s)\n)\n' "$prestress_pressure_pa" \
-        > "$run_case/prestress/constant/timeVsPressure.ramp"
-    printf '(\n    (0 %s)\n    (1 %s)\n)\n' "$prestress_pressure_pa" "$prestress_pressure_pa" \
-        > "$run_case/prestress/constant/timeVsPressure.full"
     echo "Created prestress case in: $run_case/prestress"
 fi
 
@@ -1780,14 +1768,16 @@ if [[ "$prestress" == "yes" ]]; then
     prestress_allrun="$run_case/prestress/Allrun"
     sed -i -E -e "s/^tolerance=.*/tolerance=$prestress_tolerance/" \
         -e "s/^maxPasses=.*/maxPasses=$prestress_max_passes/" \
-        -e "s/^rampDeltaT=.*/rampDeltaT=$prestress_ramp_delta_t/" "$prestress_allrun"
+        -e "s/^targetPressure=.*/targetPressure=$prestress_pressure_pa/" \
+        -e "s/^pressureStep=.*/pressureStep=$prestress_pressure_step_pa/" "$prestress_allrun"
     if ! grep -qx "tolerance=$prestress_tolerance" "$prestress_allrun" ||
        ! grep -qx "maxPasses=$prestress_max_passes" "$prestress_allrun" ||
-       ! grep -qx "rampDeltaT=$prestress_ramp_delta_t" "$prestress_allrun"; then
-        echo "Error: could not set the stopping rule in $prestress_allrun" >&2
+       ! grep -qx "targetPressure=$prestress_pressure_pa" "$prestress_allrun" ||
+       ! grep -qx "pressureStep=$prestress_pressure_step_pa" "$prestress_allrun"; then
+        echo "Error: could not set the pressures and stopping rule in $prestress_allrun" >&2
         exit 1
     fi
-    echo "Prestress stops at maxMag(D) < $prestress_tolerance ($prestress_tolerance_fraction x thinnest wall $min_wall_thickness x scale $scale_factor), at most $prestress_max_passes passes"
+    echo "Prestress stops at maxMag(D) < $prestress_tolerance ($prestress_tolerance_fraction x thinnest wall $min_wall_thickness x scale $scale_factor), at most $prestress_max_passes passes at $prestress_pressure mmHg after $prestress_ramp_passes ramp passes"
 fi
 
 # Scale only the run-case copies, so the intermediate meshes keep the STL

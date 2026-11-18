@@ -133,7 +133,7 @@ The wall of both species was represented by an isotropic, nearly incompressible 
 \end{equation}
 with the isochoric Green strain $\bar{\tens{E}} = \tfrac12\left(\bar{\tens{F}}^{\mathsf{T}}\bar{\tens{F}} - \tens{I}\right)$, $\bar{\tens{F}} = J^{-1/3}\tens{F}$, where $J = \det\tens{F}$, $c$ scales the stress, $a$ sets the rate at which the wall stiffens with strain, and $\kappa$ is a bulk modulus that penalises changes of volume (\texttt{isotropicFungElastic} in \solidsFoam).
 At small strain \cref{eq:fung} reduces to linear elasticity with shear modulus $\mu = ca/2$.
-The bulk modulus was $\kappa = \SI{1}{\mega\pascal}$ for both species, which gives a small-strain Poisson's ratio of ~0.49 for both the human and pig wall and enforce incompressibilty.
+The bulk modulus was set for a small-strain Poisson's ratio of 0.49 in both species, $\kappa = 2\mu(1+\nu)/\left(3(1-2\nu)\right)$ with the small-strain shear modulus $\mu = ca/2$, giving $\kappa = \SI{1.38}{\mega\pascal}$ (human) and \SI{0.598}{\mega\pascal} (pig); this keeps the wall nearly incompressible without making the solid solve badly conditioned.
 The model parameters for each species are listed in \cref{tab:params}.
 
 \paragraph{Wall parameters from planar biaxial tests}
@@ -186,7 +186,7 @@ The porcine wall is softer at small strain ($\mu = \SI{12.0}{\kilo\pascal}$ agai
     Wall density, $\rho_s$             & \si{\kilo\gram\per\cubic\metre} & 1200                & 1200 \\
     Stress scale, $c$                  & \si{\kilo\pascal}               & 7.87                & 11.2 \\
     Exponent coefficient, $a$          & --                              & 7.05                & 2.15 \\
-    Bulk modulus, $\kappa$             & \si{\mega\pascal}               & 1                   & 1 \\
+    Bulk modulus, $\kappa$             & \si{\mega\pascal}               & 1.38                & 0.598 \\
     Wall thickness, $\varepsilon$      & \% of diameter                  & 8                   & 8 \\
     Proximal resistance, $R_p$         & \si{\pascal\second\per\cubic\metre} & \num{3.3e6}     & \num{4.44e6} \\
     Distal resistance, $R_d$           & \si{\pascal\second\per\cubic\metre} & \num{2e7}       & \num{2.52e7} \\
@@ -249,8 +249,8 @@ Hence, further passes are run with the prestress deformation gradient updated ac
 where $\tens{F}^{(k)}$ is the deformation gradient of pass $k$, measured from the reference configuration.
 
 After each pass the mesh is reset to the reference configuration, so that the geometry used in the FSI simulation is the imaged one.
-In the first pass the pressure is ramped up from zero; in later passes it is applied in full.
-Passes are repeated until the maximum displacement in a pass falls below one tenth of the thinnest wall in the geometry, with a limit of 30 passes; the resulting $\tens{F}_{\mathrm{pre}}$ is then used as the initial state of the wall in the FSI simulation.
+Each pass is a single load step, and the pressure is raised by \SI{1}{mmHg} per pass, $p^{(k)} = \min(k \times \SI{1}{mmHg},\, p_0)$, so that every solve adds only a small load to a wall already in equilibrium with the previous pressure.
+Once $p_0$ is reached, passes are repeated until the maximum displacement in a pass falls below one tenth of the thinnest wall in the geometry, with a limit of 30 passes at $p_0$; the resulting $\tens{F}_{\mathrm{pre}}$ is then used as the initial state of the wall in the FSI simulation.
 The fluid pressure and the Windkessel pressures are likewise initialised at the imaging pressure.
 \todo{Justify $p_0 = \SI{10}{mmHg}$ as the imaging pressure for each species (and whether it differs for PAH subjects); report the number of passes required and any cases that did not converge.}
 

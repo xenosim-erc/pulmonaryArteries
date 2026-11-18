@@ -33,7 +33,7 @@ rm -f prestressHistory
 # The material file copied in by Allrun from the FSI case
 rm -f constant/mechanicalProperties constant/mechanicalProperties.tmp
 
-# The pressure table copied in by Allrun from timeVsPressure.ramp or .full
+# The pressure table written by Allrun for each pass, or copied in by Allprobe
 rm -f constant/timeVsPressure
 
 # Logs, e.g. ./Allrun > log.Allrun or a batch job

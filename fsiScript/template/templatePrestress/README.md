@@ -16,11 +16,14 @@ then `F & Fpre`.
 
 Set by `meshing.sh`:
 
-- the pressure, in `constant/timeVsPressure.ramp` (pass 1) and
-  `constant/timeVsPressure.full` (later passes), in Pa;
-- `tolerance` in `Allrun`: passes stop once a run's maximum displacement,
-  `maxMag(D)` in `prestressHistory`, is below it, in metres;
-- `maxPasses` in `Allrun`: the cap on passes;
+- `targetPressure` and `pressureStep` in `Allrun`, in Pa: every pass is a
+  single load step, and pass k applies `min(k pressureStep, targetPressure)`,
+  so the pressure ramps up across the passes (1 mmHg per pass by default);
+- `tolerance` in `Allrun`: once at `targetPressure`, passes stop when a run's
+  maximum displacement, `maxMag(D)` in `prestressHistory`, is below it, in
+  metres;
+- `maxPasses` in `Allrun`: the cap on passes at `targetPressure` (the ramp
+  passes come on top);
 - `numberOfSubdomains` in `system/decomposeParDict`.
 
 The wall material and the solid mesh are not stored here: `Allrun` copies them

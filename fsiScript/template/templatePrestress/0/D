@@ -41,8 +41,8 @@ boundaryField
 
     innerWall
     {
-        // Imaging pressure, from constant/timeVsPressure (copied by Allrun
-        // from timeVsPressure.ramp or timeVsPressure.full)
+        // Pressure of the current pass, from constant/timeVsPressure
+        // (written by Allrun; Allprobe copies in timeVsPressure.probe)
         type            solidTraction;
         traction        uniform (0 0 0);
         pressureSeries

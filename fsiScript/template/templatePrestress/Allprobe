@@ -106,11 +106,11 @@ setKeyword()
     mv "$file.tmp" "$file"
 }
 
-# Restore the Allrun settings however this script ends
+# Restore the Allrun settings (one load step per pass) however this script ends
 cleanUp()
 {
     setKeyword system/controlDict enabled false
-    setKeyword system/controlDict deltaT 0.25
+    setKeyword system/controlDict deltaT 1
     if [ "$runParallel" = yes ]
     then
         rm -rf processor[0-9]*

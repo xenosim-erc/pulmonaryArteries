@@ -426,18 +426,15 @@ and `pig`. The chosen values are written into the run case's
 | `Rd` [Pa s/m^3] | `2e7` (read off Lungu Fig. 4) | `2.52e7` |
 | `Rp + Rd` | 2.9 WU | 3.7 WU, their PVR |
 | `C` [m^3/Pa], whole bed | `3.14e-8` (4.19 mL/mmHg, Lungu text) | `3.81e-8` (5.08 mL/mmHg) |
-| Wall | `isotropicFungElastic`, `c` 7.87 kPa, `a` 7.05, `K` 1 MPa: the solids4foam pulmonaryArteries tutorial's fit to Azadani et al. 2012 | `isotropicFungElastic`, `c` 11.2 kPa, `a` 2.15, `K` 1 MPa: fitted the same way to Matthews et al. 2010 (porcine supravalvular PA), taking the circumferential coefficient as correct |
+| Wall | `isotropicFungElastic`, `c` 7.87 kPa, `a` 7.05, `K` 1.38 MPa (small-strain ν 0.49): the solids4foam pulmonaryArteries tutorial's fit to Azadani et al. 2012 | `isotropicFungElastic`, `c` 11.2 kPa, `a` 2.15, `K` 0.598 MPa (ν 0.49): fitted the same way to Matthews et al. 2010 (porcine supravalvular PA), taking the circumferential coefficient as correct |
 | Imaging (diastolic) pressure | 10 mmHg, assumed; healthy range 4–12 | 15 mmHg, García-Lunar diastolic |
-| First prestress pass | 4 load steps | 16 load steps (softer wall, higher pressure) |
 | Pulse step for the wall compliance | 12 mmHg (to 22 mmHg; healthy systolic 15–25) | 11 mmHg (15 → 26, García-Lunar) |
 | Mean pressure at the template inflow | about 11.5 mmHg (3.95 L/min) | about 19.5 mmHg (5.26 L/min; they measured 21) |
 
 The outlets drain to 0 Pa, so the mean pressure is `(Rp + Rd) Q`.
 
 `placeholder yes` in an animal file makes `meshing.sh` warn whenever that file
-is used; neither file is marked at present. `--prestress-ramp-steps` sets the
-number of load steps of the first prestress pass (only 2 and 5 may be factors,
-so that the steps land exactly on `endTime` 1).
+is used; neither file is marked at present.
 
 ### Prestress
 
@@ -452,14 +449,18 @@ fluid-solid interaction run:
 1. `prestress/Allrun` applies the imaging pressure to `innerWall` and repeats
    `solids4Foam` (a steady-state solve) and `updatePrestress`, which composes
    the run's deformation gradient into the prestress, `Fpre <- F & Fpre`, and
-   resets the wall to the imaged shape. Pass 1 runs with `prestress no` and
-   ramps the pressure up over `--prestress-ramp-steps` load steps (from the
-   animal file: 4 human, 16 pig); later passes run with `prestress yes` at full
-   pressure. It takes the wall material and solid mesh from the run case each
+   resets the wall to the imaged shape. Every pass is a single load step, and
+   the pressure ramps up across the passes by `--prestress-pressure-step`
+   (default 1 mmHg) per pass until it reaches the imaging pressure: pass k
+   applies `min(k step, imaging pressure)`, so 9 ramp passes for the human
+   default of 10 mmHg and 14 for the pig's 15 mmHg. Pass 1 runs with
+   `prestress no`, later passes with `prestress yes`, so each solve only adds
+   one pressure step to a wall already balanced by `Fpre`. It takes the wall material and solid mesh from the run case each
    time, so `Fpre` always matches what the fluid-solid interaction run solves.
-2. Passes stop once the wall moves less than `--prestress-tolerance-fraction`
-   (default 0.1) times the thinnest wall, or after `--prestress-max-passes`
-   (default 30). If the tolerance is not met, the latest `Fpre` is still used
+2. Once at the imaging pressure, passes continue until the wall moves less
+   than `--prestress-tolerance-fraction` (default 0.1) times the thinnest
+   wall, or for at most `--prestress-max-passes` (default 30) passes at that
+   pressure; the ramp passes do not count towards it. If the tolerance is not met, the latest `Fpre` is still used
    and `prestress/PRESTRESS_NOT_CONVERGED` is written. Each pass is logged in
    `prestress/prestressHistory`.
 3. The final `Fpre` is copied to `0/solid/Fpre`, and the fluid-solid
