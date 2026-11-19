@@ -139,7 +139,9 @@ geometry that fails at one size is often clean at another.
 ### Wall thickness
 
 `Gauss.py` maps a wall thickness onto the surface as a percentage of the local
-smoothed centerline diameter (`--extrusion-percentage`, default 8). Measured
+smoothed centerline diameter (`--extrusion-percentage`, default 8). The wall
+is extruded `--wall-layers` cells thick (`nLayers` of varExtrudeMesh, default
+3); every cell layer adds a copy of the wall surface mesh to the solid. Measured
 wall thicknesses divided by the mid-trunk centerline diameters of the supplied
 geometries give about 8.5% for the porcine and 5.4% for the human main
 pulmonary artery. Most of the meshing results quoted in this README were
