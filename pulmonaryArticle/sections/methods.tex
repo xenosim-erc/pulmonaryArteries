@@ -212,7 +212,8 @@ We did not have this information so the mean has been considered for all geometr
 \todo{Figure fig:inlet-waveforms: the two inlet waveforms.}
 
 \paragraph{Outlets}
-Each outlet was coupled to a three-element Windkessel model \citep{westerhof2009arterial},
+Each outlet was coupled to a three-element Windkessel model \citep{westerhof2009arterial}.
+Windkessels use an electrical analogy to an RC-circuit to account for the capacitating effect of the pulmonary circulation.
 \begin{equation}
   p_i + R_{d,i} C_i \frac{\mathrm{d}p_i}{\mathrm{d}t}
   = \left(R_{p,i} + R_{d,i}\right) Q_i + R_{p,i} R_{d,i} C_i \frac{\mathrm{d}Q_i}{\mathrm{d}t},
