@@ -171,7 +171,7 @@ if [[ $# -eq 0 ]]; then
     echo "       [--prestress-pressure MMHG]" >&2
     echo "       [--no-prestress] [--prestress-tolerance-fraction VALUE]" >&2
     echo "       [--prestress-max-passes N] [--prestress-pressure-step MMHG]" >&2
-    echo "       [--normal-smoothing-passes N]" >&2
+    echo "       [--normal-smoothing-passes N] [--wall-layers N]" >&2
     exit 2
 fi
 
@@ -240,6 +240,8 @@ prestress_pressure_step="1"
 saddle_dilation=""
 saddle_iterations=""
 normal_smoothing_passes=""
+# Cells across the solid wall (nLayers of varExtrudeMesh)
+wall_layers="3"
 
 # Read the output-related options without removing them from the array that is
 # passed to pulmonary_centerlines.py. Both --option value and --option=value
@@ -653,6 +655,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --normal-smoothing-passes=*)
             normal_smoothing_passes="${argument#*=}"
             ;;
+        --wall-layers)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wall-layers requires a value" >&2
+                exit 2
+            }
+            wall_layers="${arguments[$index]}"
+            ;;
+        --wall-layers=*)
+            wall_layers="${argument#*=}"
+            ;;
     esac
 done
 
@@ -703,6 +716,11 @@ for count_name in normal_smoothing_passes saddle_dilation saddle_iterations; do
     fi
 done
 echo "Smoothing: adaptive extrusion normals (+$normal_smoothing_passes uniform passes); saddle region $saddle_dilation rings, $saddle_iterations passes"
+if [[ ! "$wall_layers" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --wall-layers must be a positive whole number, not '$wall_layers'" >&2
+    exit 2
+fi
+echo "Solid wall: $wall_layers cells across the thickness"
 
 # The two formulations need different interface conditions, so each has its own
 # case template. Robin cases are named with a Robin suffix so both can be
@@ -1005,10 +1023,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes|--wall-layers)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*|--wall-layers=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -1064,6 +1082,7 @@ print_settings() {
         "Thickness smoothing passes:" "$thickness_smoothing_passes" \
         "Saddle smoothing:" "$saddle_dilation rings, $saddle_iterations passes" \
         "Extrusion-normal smoothing:" "adaptive, after $normal_smoothing_passes uniform passes" \
+        "Cells across the wall:" "$wall_layers" \
         "Cells per radius:" "$cells_per_radius" \
         "Sphere radius factor:" "$sphere_radius_factor" \
         "Max refinement levels:" "$maximum_refinement_levels" \
@@ -1129,6 +1148,11 @@ sed -i -E "s/^([[:space:]]*nNormalSmoothingIterations[[:space:]]+)[0-9]+;/\1$nor
     "$var_extrude_dict"
 if ! grep -Eq "^[[:space:]]*nNormalSmoothingIterations[[:space:]]+$normal_smoothing_passes;" "$var_extrude_dict"; then
     echo "Error: could not set nNormalSmoothingIterations in $var_extrude_dict" >&2
+    exit 1
+fi
+sed -i -E "s/^([[:space:]]*nLayers[[:space:]]+)[0-9]+;/\1$wall_layers;/" "$var_extrude_dict"
+if ! grep -Eq "^[[:space:]]*nLayers[[:space:]]+$wall_layers;" "$var_extrude_dict"; then
+    echo "Error: could not set nLayers in $var_extrude_dict" >&2
     exit 1
 fi
 
