@@ -14,8 +14,10 @@ Reads the lung sides from lung_sides.py (name, side, area) and
 surfaceFieldValue matches patch groups by name, so "names (LPA)" sums over all
 the left-lung outlets. Output: postProcessing/fluid/<name>/<startTime>/
 surfaceFieldValue.dat. The outlet rings of the wall are fixed, so phi there is
-the flow rate of the blood. The inlet flow is negative (into the domain), so
-inletFlow + LPAFlow + RPAFlow is the mass-balance error.
+the flow rate of the blood. The inlet flow is negative (into the domain). With
+a compliant wall inletFlow + LPAFlow + RPAFlow is minus the rate the lumen
+fills (dV/dt), not an error; extract_results.py takes dV/dt off to get the
+mass-balance error.
 
 Usage: lung_flow_setup.py SIDES_CSV FLUID_BOUNDARY_FILE FUNCTIONS_FILE
 """

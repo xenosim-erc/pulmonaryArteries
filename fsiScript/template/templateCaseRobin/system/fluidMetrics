@@ -13,6 +13,14 @@
 //   helicity       int U.(curl U) dV                                        [m^4/s^2]
 //   absHelicity    int |U.(curl U)| dV                                      [m^4/s^2]
 //   maxMagU        peak velocity magnitude                                  [m/s]
+//
+// and postProcessing/fluid/fluidMetrics/<startTime>/fluidEnergyFlux.dat: the
+// rate energy leaves the fluid through each patch, per unit density [m^5/s^3]
+// (times rho: W). Open patches (inlet, outlets): int (p + |U|^2/2) phi, so
+// the inlet's is negative. Walls: the pressure work on the moving wall,
+// int p (mesh flux), positive while the wall moves outwards. Over a cycle,
+// minus the sum over all patches = dissipation + change in kinetic energy
+// (+ the small viscous work on the wall, not included).
 
 fluidMetrics
 {
@@ -47,11 +55,14 @@ fluidMetrics
         #include "turbulentTransportModel.H"
         #include "fvc.H"
         #include "OFstream.H"
+        #include "emptyFvPatch.H"
+        #include "wallFvPatch.H"
     #};
 
     codeData
     #{
         autoPtr<OFstream> filePtr_;
+        autoPtr<OFstream> fluxFilePtr_;
     #};
 
     codeExecute
@@ -81,6 +92,36 @@ fluidMetrics
         const scalar absHelicity = gSum(V*mag(h));
         const scalar maxMagU = gMax(mag(U.primitiveField()));
 
+        // Energy leaving through each patch (see the header).
+        const volScalarField& p = m.lookupObject<volScalarField>("p");
+        const surfaceScalarField& phi = m.lookupObject<surfaceScalarField>("phi");
+        DynamicList<word> fluxNames;
+        DynamicList<scalar> fluxes;
+        forAll(m.boundary(), patchi)
+        {
+            const fvPatch& patch = m.boundary()[patchi];
+            if (patch.coupled() || isA<emptyFvPatch>(patch))
+            {
+                continue;
+            }
+            const scalarField& pp = p.boundaryField()[patchi];
+            scalar flux = 0;
+            if (isA<wallFvPatch>(patch))
+            {
+                if (m.moving())
+                {
+                    flux = gSum(pp*m.phi().boundaryField()[patchi]);
+                }
+            }
+            else
+            {
+                const vectorField& Up = U.boundaryField()[patchi];
+                flux = gSum((pp + 0.5*magSqr(Up))*phi.boundaryField()[patchi]);
+            }
+            fluxNames.append(patch.name());
+            fluxes.append(flux);
+        }
+
         if (Pstream::master())
         {
             if (!filePtr_)
@@ -102,6 +143,29 @@ fluidMetrics
                 << time().value() << tab << volume << tab << kineticEnergy
                 << tab << dissipationRate << tab << helicity
                 << tab << absHelicity << tab << maxMagU << endl;
+
+            if (!fluxFilePtr_)
+            {
+                const fileName dir
+                (
+                    time().globalPath()/"postProcessing"/"fluid"/name()
+                   /time().timeName(time().startTime().value())
+                );
+                fluxFilePtr_.reset(new OFstream(dir/"fluidEnergyFlux.dat"));
+                fluxFilePtr_() << "# Time";
+                forAll(fluxNames, i)
+                {
+                    fluxFilePtr_() << tab << fluxNames[i];
+                }
+                fluxFilePtr_() << nl;
+                fluxFilePtr_().precision(10);
+            }
+            fluxFilePtr_() << time().value();
+            forAll(fluxes, i)
+            {
+                fluxFilePtr_() << tab << fluxes[i];
+            }
+            fluxFilePtr_() << endl;
         }
     #};
 }

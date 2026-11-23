@@ -1865,6 +1865,22 @@ if ! grep -Eq "^writeInterval[[:space:]]+$write_interval;" "$run_control_dict" |
 fi
 echo "Set writeInterval to $write_interval s, purgeWrite $purge_write"
 
+# OpenFOAM writes at the time step nearest each write time, so when the write
+# interval is not a whole number of time steps half the snapshots land half a
+# step early. Cycle ends stay exact (the cycle is a whole number of steps),
+# but say so, and suggest snapshot counts that divide evenly.
+run_delta_t="$(sed -n -E 's/^deltaT[[:space:]]+([^;]+);.*/\1/p' "$run_control_dict" | head -n 1)"
+if [[ -n "$run_delta_t" ]] &&
+   ! awk -v t="$cycle_period" -v n="$cycle_snapshots" -v d="$run_delta_t" \
+        'BEGIN { s = t / (n * d); exit !(s - int(s + 0.5) < 1e-6 && int(s + 0.5) - s < 1e-6) }'; then
+    even_counts="$(awk -v t="$cycle_period" -v n="$cycle_snapshots" -v d="$run_delta_t" 'BEGIN {
+        for (k = n - 15; k <= n + 15; k++) if (k > 0) { s = t / (k * d)
+            if (s - int(s + 0.5) < 1e-6 && int(s + 0.5) - s < 1e-6) printf "%s%d", (c++ ? " " : ""), k } }')"
+    echo "Note: $write_interval s is not a whole number of time steps (deltaT $run_delta_t s): writes" \
+         "inside the cycle land up to half a step early. --cycle-snapshots giving whole steps:" \
+         "${even_counts:-none near $cycle_snapshots}" >&2
+fi
+
 for decompose_dict in "$run_case"/system/decomposeParDict \
                       "$run_case"/system/{fluid,solid}/decomposeParDict \
                       "$run_case"/prestress/system/decomposeParDict; do

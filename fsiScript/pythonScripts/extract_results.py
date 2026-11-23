@@ -58,6 +58,7 @@ FSI_DIR = SCRIPT_DIR.parent
 DEFAULT_RESULTS = FSI_DIR / "results"
 MMHG = 133.322387415  # Pa
 NUMBER = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$")
+trapz = getattr(np, "trapezoid", None) or np.trapz  # NumPy 2 renamed trapz
 
 
 # --------------------------------------------------------------------------
@@ -184,9 +185,14 @@ def history(directory: Path, filename: str) -> tuple[list[str], np.ndarray] | No
     starts = sorted((d for d in directory.iterdir() if d.is_dir() and NUMBER.match(d.name)),
                     key=lambda d: float(d.name))
     names, pieces = [], []
+    stem, suffix = Path(filename).stem, Path(filename).suffix
     for start in starts:
-        path = start / filename
-        if path.is_file():
+        # A restart from the same start time writes <stem>_<restartTime>.dat
+        # beside the original file; read them in time order, original first.
+        later = [f for f in start.glob(f"{stem}_*{suffix}") if NUMBER.match(f.stem[len(stem) + 1:])]
+        for path in [start / filename, *sorted(later, key=lambda f: float(f.stem[len(stem) + 1:]))]:
+            if not path.is_file():
+                continue
             names_here, data = read_dat(path)
             if len(data):
                 names = names_here or names
@@ -201,6 +207,23 @@ def history(directory: Path, filename: str) -> tuple[list[str], np.ndarray] | No
     data = data[::-1][np.sort(last)][::-1]
     data = data[np.argsort(data[:, 0], kind="stable")]
     return names[:ncol], data
+
+
+def restart_times(case: Path) -> list[float]:
+    """Times the solver was (re)started at, from the <startTime>/ directories
+    and <name>_<time>.dat files function objects write on each start."""
+    post = case / "postProcessing"
+    times: set[float] = set()
+    if not post.is_dir():
+        return []
+    for directory in [post, *[d for d in post.rglob("*") if d.is_dir()]]:
+        if NUMBER.match(directory.name):
+            times.add(round(float(directory.name), 9))
+            for f in directory.glob("*_*.dat"):
+                tail = f.stem.rsplit("_", 1)[-1]
+                if NUMBER.match(tail):
+                    times.add(round(float(tail), 9))
+    return sorted(times)
 
 
 def time_series(case: Path, rho: float) -> dict[str, tuple[np.ndarray, np.ndarray]]:
@@ -232,6 +255,11 @@ def time_series(case: Path, rho: float) -> dict[str, tuple[np.ndarray, np.ndarra
                 if col in scale:
                     label, factor = scale[col]
                     series[label] = (data[:, 0], data[:, i] * factor)
+        result = history(fluid / "fluidMetrics", "fluidEnergyFlux.dat")
+        if result is not None:
+            names, data = result
+            for i, patch in enumerate(names[1:], start=1):
+                series[f"energyOut_{patch}_mW"] = (data[:, 0], data[:, i] * rho * 1e3)
     # Region-less function objects (solid and FSI) write to postProcessing/<startTime>/.
     for filename, columns in (
         ("fsiConvergenceData.dat", {"nFsiCorrectors": ("nFsiCorrectors", 1.0)}),
@@ -287,7 +315,7 @@ def window(t: np.ndarray, v: np.ndarray, start: float, end: float, tol: float):
 
 
 def cycle_mean(t, v, period):
-    return float(np.trapz(v, t) / period) if len(t) > 1 else math.nan
+    return float(trapz(v, t) / period) if len(t) > 1 else math.nan
 
 
 def periodicity(t, v, end, period, tol):
@@ -330,8 +358,8 @@ def cycle_summary(times, table, period, end, tol) -> tuple[dict, dict]:
                 v = -v  # report inflow as positive
             out[f"Q_{where}_mean_mLps"] = cycle_mean(t, v, period)
             out[f"Q_{where}_peak_mLps"] = float(v.max())
-            total = np.trapz(np.abs(v), t)
-            out[f"Q_{where}_reverseFraction"] = float(np.trapz(np.clip(-v, 0, None), t) / total) if total > 0 else math.nan
+            total = trapz(np.abs(v), t)
+            out[f"Q_{where}_reverseFraction"] = float(trapz(np.clip(-v, 0, None), t) / total) if total > 0 else math.nan
 
     # Cardiac events from the inlet: peak systole at peak inflow, end-diastole
     # at minimum inlet pressure (falling back on the inflow minimum).
@@ -339,12 +367,13 @@ def cycle_summary(times, table, period, end, tol) -> tuple[dict, dict]:
     if t is not None and len(t):
         events["peakSystole"] = float(t[np.argmin(q)])  # inflow is negative
     t, p = last("p_inlet_mmHg")
-    if t is not None and len(t):
+    if t is not None and len(t) > 1:
         events["endDiastole"] = float(t[np.argmin(p)])
         events.setdefault("peakSystole", float(t[np.argmax(p)]))
     elif "Q_inlet_mLps" in table:
         t, q = last("Q_inlet_mLps")
-        events["endDiastole"] = float(t[np.argmax(q)])
+        if len(t):
+            events["endDiastole"] = float(t[np.argmax(q)])
 
     if {"Q_LPA_mean_mLps", "Q_RPA_mean_mLps"} <= out.keys():
         total = out["Q_LPA_mean_mLps"] + out["Q_RPA_mean_mLps"]
@@ -353,11 +382,20 @@ def cycle_summary(times, table, period, end, tol) -> tuple[dict, dict]:
             i = int(np.argmin(np.abs(times - events["peakSystole"])))
             left, right = table["Q_LPA_mLps"][i], table["Q_RPA_mLps"][i]
             out["LPA_fraction_peakSystole"] = float(left / (left + right)) if left + right else math.nan
-    if {"Q_inlet_mLps", "Q_LPA_mLps", "Q_RPA_mLps"} <= table.keys():
-        t, imbalance = window(times, table["Q_inlet_mLps"] + table["Q_LPA_mLps"] + table["Q_RPA_mLps"],
-                              end - period, end, tol)
-        if len(t) > 1 and out.get("Q_inlet_mean_mLps"):
-            out["massBalanceError"] = cycle_mean(t, np.abs(imbalance), period) / out["Q_inlet_mean_mLps"]
+    if {"Q_inlet_mLps", "Q_LPA_mLps", "Q_RPA_mLps"} <= table.keys() and out.get("Q_inlet_mean_mLps"):
+        # With a compliant wall, inflow - outflow is the rate the lumen fills
+        # (dV/dt), not an error: in + out + dV/dt = 0 (inflow is negative).
+        net = table["Q_inlet_mLps"] + table["Q_LPA_mLps"] + table["Q_RPA_mLps"]
+        t, stored = window(times, net, end - period, end, tol)
+        if len(t) > 1:
+            out["netStorage_fractionOfInflow"] = -cycle_mean(t, stored, period) / out["Q_inlet_mean_mLps"]
+        if "volume_mL" in table:
+            ok = np.isfinite(table["volume_mL"])
+            if ok.sum() > 2:
+                dvdt = np.interp(times, times[ok], np.gradient(table["volume_mL"][ok], times[ok]))
+                t, imbalance = window(times, net + dvdt, end - period, end, tol)
+                if len(t) > 1:
+                    out["massBalanceError"] = cycle_mean(t, np.abs(imbalance), period) / out["Q_inlet_mean_mLps"]
     if "p_inlet_mean_mmHg" in out and out.get("Q_inlet_mean_mLps"):
         out["resistance_inlet_Pasm3"] = out["p_inlet_mean_mmHg"] * MMHG / (out["Q_inlet_mean_mLps"] * 1e-6)
     for side in ("LPA", "RPA"):
@@ -366,7 +404,7 @@ def cycle_summary(times, table, period, end, tol) -> tuple[dict, dict]:
 
     t, v = last("dissipation_mW")
     if t is not None and len(t) > 1:
-        out["energyLoss_mJ"] = float(np.trapz(v, t))  # mW s = mJ
+        out["energyLoss_mJ"] = float(trapz(v, t))  # mW s = mJ
         out["dissipation_mean_mW"] = cycle_mean(t, v, period)
     for name, label in (("kineticEnergy_mJ", "kineticEnergy"), ("helicity_m4ps2", "helicity"),
                         ("absHelicity_m4ps2", "absHelicity")):
@@ -388,10 +426,141 @@ def cycle_summary(times, table, period, end, tol) -> tuple[dict, dict]:
         out["nFsiCorrectors_mean"] = float(v.mean())
         out["nFsiCorrectors_max"] = float(v.max())
 
+    out.update(power_summary(times, table, period, end, tol, out))
+
     for name in ("p_inlet_mmHg", "Q_LPA_mLps", "Q_RPA_mLps", "volume_mL"):
         if name in table:
             out[f"periodicity_{name.rsplit('_', 1)[0]}"] = periodicity(times, table[name], end, period, tol)
     return out, events
+
+
+def power_summary(times, table, period, end, tol, cycle: dict) -> dict:
+    """Hydraulic power the inflow delivers at the inlet, split into steady
+    and oscillatory parts, and the energy budget of the fluid."""
+    out: dict = {}
+    if not {"Q_inlet_mLps", "p_inlet_mmHg"} <= table.keys():
+        return out
+    q = -table["Q_inlet_mLps"] * 1e-6          # inflow [m^3/s], positive
+    p = table["p_inlet_mmHg"] * MMHG           # [Pa]
+    t, qq = window(times, q, end - period, end, tol)
+    _, pq = window(times, p * q, end - period, end, tol)
+    _, pp = window(times, p, end - period, end, tol)
+    if len(t) < 3 or len(pq) != len(t) or len(pp) != len(t):
+        return out
+    total = cycle_mean(t, pq, period)          # W
+    steady = cycle_mean(t, pp, period) * cycle_mean(t, qq, period)
+    out["power_total_mW"] = total * 1e3
+    out["power_steady_mW"] = steady * 1e3
+    out["power_oscillatory_mW"] = (total - steady) * 1e3
+    out["oscillatoryPowerFraction"] = (total - steady) / total if total else math.nan
+    stroke_volume = trapz(qq, t)               # m^3
+    out["strokeVolume_mL"] = stroke_volume * 1e6
+    out["strokeWork_mJ"] = total * period * 1e3
+    if stroke_volume > 0:
+        # Work per volume ejected: the flow-weighted mean inlet pressure.
+        out["workPerStrokeVolume_mmHg"] = total * period / stroke_volume / MMHG
+    if "energyLoss_mJ" in cycle and out["strokeWork_mJ"]:
+        out["energyLoss_fractionOfStrokeWork"] = cycle["energyLoss_mJ"] / out["strokeWork_mJ"]
+
+    # Energy budget from the patch fluxes (fluidEnergyFlux.dat): the inlet's
+    # total (pressure + kinetic) energy inflow goes to the outlets, the wall,
+    # viscous dissipation and the change in kinetic energy.
+    flux = {n[len("energyOut_"):-3]: n for n in table if n.startswith("energyOut_")}
+    if "inlet" in flux:
+        def mean(name):
+            tt, v = window(times, table[name], end - period, end, tol)
+            return cycle_mean(tt, v, period) if len(tt) > 1 else math.nan
+        inflow = -mean(flux["inlet"])
+        outlets = sum(mean(n) for k, n in flux.items() if k != "inlet" and not k.startswith("wall"))
+        wall = sum(mean(n) for k, n in flux.items() if k.startswith("wall"))
+        out["power_totalWithKinetic_mW"] = inflow
+        if inflow:
+            out["kineticPowerFraction"] = (inflow - out["power_total_mW"]) / inflow
+            out["energyToOutlets_fraction"] = outlets / inflow
+            out["energyToWall_fraction"] = wall / inflow
+        change = 0.0
+        if "kineticEnergy_mJ" in table:
+            tt, ke = window(times, table["kineticEnergy_mJ"], end - period, end, tol)
+            change = (ke[-1] - ke[0]) / period if len(tt) > 1 else 0.0
+        if "dissipation_mean_mW" in cycle and inflow:
+            out["energyLoss_fractionOfInflow"] = cycle["dissipation_mean_mW"] / inflow
+            out["energyBudgetResidual_fraction"] = (inflow - outlets - wall - cycle["dissipation_mean_mW"]
+                                                    - change) / inflow
+    return out
+
+
+def windkessel_baseline(case: Path, times, table, period, end, tol) -> dict:
+    """The same inlet power measures for the outlet Windkessels alone (no 3D
+    arteries): the case's per-outlet RCR models in parallel, driven by its
+    inflow. The FSI values minus these are the effect of the 3D arteries."""
+    path = case / "0/fluid/windkesselOutlets"
+    if not path.is_file():
+        return {}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    outlets = []
+    for block in re.finditer(r"(?:^|\n)\s*(\w+)\s*\n\s*\{(.*?)\}", text, re.S):
+        body = block.group(2)
+        values = {k: re.search(rf"\b{k}\s+([-+0-9.eE]+)\s*;", body) for k in ("R", "Rch", "C")}
+        if all(values.values()):
+            outlets.append({k: float(v.group(1)) for k, v in values.items()})
+    if not outlets:
+        return {}
+    if "Q_inlet_mLps" in table:
+        t, q = window(times, -table["Q_inlet_mLps"] * 1e-6, end - period, end, tol)
+        source = "the case's inlet flow over the last cycle"
+    else:
+        t, q = np.empty(0), np.empty(0)
+    if len(t) < 8:
+        waveform = inlet_waveform(case)
+        if waveform is None or not waveform.is_file():
+            return {}
+        rows = [line.replace("(", " ").replace(")", " ").split() for line in
+                waveform.read_text(encoding="utf-8", errors="replace").splitlines()]
+        rows = [r for r in rows if len(r) >= 2 and NUMBER.match(r[0]) and NUMBER.match(r[1])]
+        t, q = np.array([float(r[0]) for r in rows]), np.array([float(r[1]) for r in rows])
+        t = t - t[0]
+        source = "the inlet waveform"
+    n = 4096
+    grid = t[0] + np.arange(n) * period / n
+    flow = np.interp(grid, t, q, period=period)
+    harmonics = np.fft.rfft(flow) / n
+    omega = 2 * np.pi * np.arange(len(harmonics)) / period
+    admittance = sum(1.0 / (o["Rch"] + o["R"] / (1 + 1j * omega * o["R"] * o["C"])) for o in outlets)
+    pressure = np.fft.irfft(harmonics / admittance * n, n)
+    total = float(np.mean(pressure * flow))
+    steady = float(pressure.mean() * flow.mean())
+    return {
+        "baseline_power_total_mW": total * 1e3,
+        "baseline_oscillatoryPowerFraction": (total - steady) / total if total else math.nan,
+        "baseline_p_mean_mmHg": float(pressure.mean() / MMHG),
+        "baseline_p_pulse_mmHg": float(np.ptp(pressure) / MMHG),
+        "_source": source,
+    }
+
+
+def write_pv(path: Path, times, table, period, end, tol) -> bool:
+    """Last-cycle inlet pressure against ejected volume (the ejection limb of
+    a right-ventricular PV loop) and against the lumen volume of the 3D model."""
+    if not {"Q_inlet_mLps", "p_inlet_mmHg"} <= table.keys():
+        return False
+    keep = (times >= end - period - tol) & (times <= end + tol)
+    keep &= np.isfinite(table["Q_inlet_mLps"]) & np.isfinite(table["p_inlet_mmHg"])
+    if keep.sum() < 3:
+        return False
+    t = times[keep]
+    q = -table["Q_inlet_mLps"][keep]
+    ejected = np.concatenate([[0.0], np.cumsum(0.5 * (q[1:] + q[:-1]) * np.diff(t))])
+    volume = table["volume_mL"][keep] if "volume_mL" in table else np.full(len(t), np.nan)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["time_s", "phase_s", "p_inlet_mmHg", "Q_inflow_mLps", "V_ejected_mL",
+                         "volume_mL", "dVolume_mL"])
+        for i in range(len(t)):
+            writer.writerow([f"{t[i]:.6g}", f"{t[i] - t[0]:.6g}", f"{table['p_inlet_mmHg'][keep][i]:.8g}",
+                             f"{q[i]:.8g}", f"{ejected[i]:.8g}",
+                             "" if not np.isfinite(volume[i]) else f"{volume[i]:.8g}",
+                             "" if not np.isfinite(volume[i] - volume[0]) else f"{volume[i] - volume[0]:.8g}"])
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -514,8 +683,8 @@ def find_array(names: list[str], suffix: str) -> str | None:
     return hits[0] if hits else None
 
 
-def extract_wall(foam: FoamCase, out: Path, rho: float, period: float, end: float, tol: float,
-                 events: dict, args, meta: dict) -> dict:
+def extract_wall(foam: FoamCase, case: Path, out: Path, rho: float, period: float, end: float,
+                 tol: float, events: dict, args, meta: dict) -> dict:
     """Wall fields over the last cycle; returns summary scalars."""
     summary: dict = {}
     wall = "/fluid/patch/wall"
@@ -547,20 +716,34 @@ def extract_wall(foam: FoamCase, out: Path, rho: float, period: float, end: floa
         disp.append(points_of(data) - x_ref)
     wss, pressure, disp = np.array(wss), np.array(pressure), np.array(disp)
 
+    # The OSI function object restarts its integrals from zero whenever the
+    # solver restarts. A restart before the cycle is harmless; one exactly at
+    # its start means the integral at the end covers the cycle alone; one
+    # inside it leaves only the snapshots.
+    restarts = [r for r in restart_times(case) if r > tol]
+    inside = [r for r in restarts if t0 + tol < r < t1 - tol]
+    at_start = any(abs(r - t0) <= tol for r in restarts)
+    if inside:
+        meta["warnings"].append(f"solver restart(s) at t = {inside} inside the last cycle reset the "
+                                "OSI running integrals")
     method = None
-    if full_cycle and acc_vec and acc_mag:
-        start = foam.read(wall, float(t0), [acc_vec, acc_mag])
+    if full_cycle and acc_vec and acc_mag and not inside:
         stop = foam.read(wall, float(t1), [acc_vec, acc_mag])
-        s_vec, s_mag = cell_array(start, acc_vec), cell_array(start, acc_mag)
         e_vec, e_mag = cell_array(stop, acc_vec), cell_array(stop, acc_mag)
+        if at_start:
+            s_vec, s_mag = np.zeros_like(e_vec), np.zeros_like(e_mag)
+        else:
+            start = foam.read(wall, float(t0), [acc_vec, acc_mag])
+            s_vec, s_mag = cell_array(start, acc_vec), cell_array(start, acc_mag)
         if all(a is not None for a in (s_vec, s_mag, e_vec, e_mag)):
             mean_wss = (e_vec - s_vec) * rho / period
             tawss = (e_mag - s_mag) * rho / period
-            method = "running integrals of the OSI function object at both ends of the cycle (exact)"
+            method = ("running integrals of the OSI function object at both ends of the cycle (exact)"
+                      + ("; restarted at the cycle start" if at_start else ""))
     if method is None:
         span = t1 - t0
-        mean_wss = np.trapz(wss, snapshot_times, axis=0) / span
-        tawss = np.trapz(np.linalg.norm(wss, axis=2), snapshot_times, axis=0) / span
+        mean_wss = trapz(wss, snapshot_times, axis=0) / span
+        tawss = trapz(np.linalg.norm(wss, axis=2), snapshot_times, axis=0) / span
         method = (f"trapezoidal rule over {len(snapshot_times)} WSS snapshots spanning {span:g} s "
                   f"of a {period:g} s cycle (approximate)")
         meta["warnings"].append("TAWSS/OSI from snapshots, not the running integrals: " + method)
@@ -591,10 +774,10 @@ def extract_wall(foam: FoamCase, out: Path, rho: float, period: float, end: floa
     add_array(poly, "RRT_1pPa", rrt)
     add_array(poly, "ECAP_1pPa", ecap)
     add_array(poly, "meanWSS_Pa", mean_wss)
-    add_array(poly, "p_mean_mmHg", np.trapz(pressure, snapshot_times, axis=0) / (t1 - t0) / MMHG)
+    add_array(poly, "p_mean_mmHg", trapz(pressure, snapshot_times, axis=0) / (t1 - t0) / MMHG)
     add_array(poly, "p_amplitude_mmHg", np.ptp(pressure, axis=0) / MMHG)
     add_array(poly, "area_m2", area)
-    add_array(poly, "dispMag_mean_mm", np.trapz(disp_mag, snapshot_times, axis=0) / (t1 - t0) * 1e3, point=True)
+    add_array(poly, "dispMag_mean_mm", trapz(disp_mag, snapshot_times, axis=0) / (t1 - t0) * 1e3, point=True)
     add_array(poly, "dispMag_max_mm", disp_mag.max(axis=0) * 1e3, point=True)
     add_array(poly, "dispCyclic_mm", cyclic * 1e3, point=True)
     add_array(poly, "D_endDiastole_m", disp[i_ed], point=True)
@@ -784,9 +967,20 @@ def extract(case: Path, args) -> dict:
             previous_archive = json.loads((out / "metadata.json").read_text(encoding="utf-8")).get("archive")
         except (OSError, ValueError):
             pass
+    # Build in <name>.partial and swap it in only once everything succeeded,
+    # so a failed --force leaves the earlier results untouched.
+    final, out = out, out.with_name(out.name + ".partial")
+    if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    try:
+        return _extract(case, name, out, final, previous_archive, args)
+    except BaseException:
+        shutil.rmtree(out, ignore_errors=True)
+        raise
 
+
+def _extract(case: Path, name: str, out: Path, final: Path, previous_archive, args) -> dict:
     params = read_params(case)
     rho = args.rho or fluid_density(case)
     period = args.period or cycle_period(case)
@@ -804,7 +998,7 @@ def extract(case: Path, args) -> dict:
         "endTime_s": end_time,
         "writeInterval_s": foam_entry(case / "system/controlDict", "writeInterval"),
         "purgeWrite": foam_entry(case / "system/controlDict", "purgeWrite"),
-        "inletWaveform": str(inlet_waveform(case)),
+        "inletWaveform": str(inlet_waveform(case)) if inlet_waveform(case) else None,
         "solver": solver_versions(case),
         "meshingParams": params,
         "thresholds": {"lowTAWSS_Pa": args.low_tawss, "highOSI": args.high_osi, "highECAP_1pPa": args.high_ecap},
@@ -823,6 +1017,7 @@ def extract(case: Path, args) -> dict:
     field_times = foam.times if foam is not None else np.empty(0)
     last_time = float(max(times.max() if len(times) else 0, field_times.max() if len(field_times) else 0))
     meta["lastTime_s"] = last_time
+    meta["lastWriteTime_s"] = float(field_times.max()) if len(field_times) else None
     meta["complete"] = bool(end_time is not None and last_time >= end_time - tol)
     meta["cyclesRun"] = last_time / period
     if not meta["complete"]:
@@ -838,6 +1033,14 @@ def extract(case: Path, args) -> dict:
         write_timeseries(out / "timeseries.csv", times, table, period)
         cycle, events = cycle_summary(times, table, period, end, tol)
         summary.update(cycle)
+        baseline = windkessel_baseline(case, times, table, period, end, tol)
+        if baseline:
+            meta["windkesselBaselineSource"] = baseline.pop("_source")
+            summary.update(baseline)
+            if "oscillatoryPowerFraction" in summary:
+                summary["oscillatoryPowerFraction_minusBaseline"] = (
+                    summary["oscillatoryPowerFraction"] - summary["baseline_oscillatoryPowerFraction"])
+        write_pv(out / "pv_inlet.csv", times, table, period, end, tol)
     else:
         meta["warnings"].append("no function-object histories found in postProcessing/")
     if "peakSystole" not in events and len(field_times):
@@ -846,7 +1049,7 @@ def extract(case: Path, args) -> dict:
     meta["events_s"] = events
 
     if foam is not None:
-        summary.update(extract_wall(foam, out, rho, period, end, tol, events, args, meta))
+        summary.update(extract_wall(foam, case, out, rho, period, end, tol, events, args, meta))
         summary.update(extract_solid(foam, out, events, meta))
     copy_setup(case, out)
 
@@ -855,6 +1058,9 @@ def extract(case: Path, args) -> dict:
     row = {"complete": meta["complete"], "cyclesRun": round(meta["cyclesRun"], 3),
            "animal": params.get("Animal", "").split(" ")[0], "commit": params.get("Repository commit", ""),
            "nWarnings": len(meta["warnings"]), **summary}
+    if final.exists():
+        shutil.rmtree(final)
+    out.rename(final)
     update_summary(args.results_dir / "summary.csv", name, row)
     for warning in meta["warnings"]:
         print(f"  warning: {warning}", file=sys.stderr)
@@ -890,8 +1096,8 @@ def main() -> int:
         try:
             summary = extract(case, args)
             print(f"  wrote {args.results_dir / (args.name or case.resolve().name)} ({len(summary)} summary values)")
-        except (OSError, ValueError, KeyError) as error:
-            print(f"  error: {error}", file=sys.stderr)
+        except Exception as error:  # report and go on to the next case
+            print(f"  error: {type(error).__name__}: {error}", file=sys.stderr)
             failures += 1
     return 1 if failures else 0
 

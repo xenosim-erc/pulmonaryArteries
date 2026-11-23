@@ -126,25 +126,37 @@ def excluded(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in patterns)
 
 
+def inside(path: Path, case: Path) -> bool:
+    try:
+        path.resolve().relative_to(case.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def collect(case: Path, keep_times: list[Path], drop_fields: list[str],
             meshing: Path | None) -> list[tuple[Path, str]]:
     """(source file, name in the archive) for everything to archive."""
     name = case.name
     members: list[tuple[Path, str]] = []
 
+    # Symlinks that point inside the case (solids4foam's fsiProperties ->
+    # fsiProperties.pimpleFluid, 0/fluid -> fluid.pimpleFluid, ...) are
+    # archived as the files they point to; links leaving the case are not.
     def add_tree(root: Path, arc_root: str, skip_dir=lambda d: False, skip_file=lambda f: False):
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
             here = Path(dirpath)
-            dirnames[:] = sorted(d for d in dirnames if not skip_dir(here / d))
+            dirnames[:] = sorted(d for d in dirnames if not skip_dir(here / d)
+                                 and (not (here / d).is_symlink() or inside(here / d, case)))
             for f in sorted(filenames):
                 path = here / f
-                if path.is_file() and not path.is_symlink() and not skip_file(path):
+                if path.is_file() and (not path.is_symlink() or inside(path, case)) and not skip_file(path):
                     members.append((path, f"{arc_root}/{path.relative_to(root)}"))
 
     kept = {p.resolve() for p in keep_times}
     for entry in sorted(case.iterdir()):
         arc = f"{name}/{entry.name}"
-        if entry.is_symlink():
+        if entry.is_symlink() and not inside(entry, case):
             continue
         if entry.is_file():
             if not entry.name.endswith(".foam"):
@@ -197,7 +209,9 @@ def write_archive(members: list[tuple[Path, str]], target: Path, level: int):
             link.parent.mkdir(parents=True, exist_ok=True)
             link.symlink_to(src.resolve())
         file_list.write_text("\n".join(arc for _, arc in members) + "\n", encoding="utf-8")
-        command = ["tar", "--create", "--dereference", "--file", str(tmp),
+        # --hard-dereference: a symlink and its target are the same file, which
+        # tar would otherwise store once plus a hard link; store both in full.
+        command = ["tar", "--create", "--dereference", "--hard-dereference", "--file", str(tmp),
                    "--use-compress-program", f"zstd -T0 -{level}",
                    "-C", str(stage), "--verbatim-files-from", "--files-from", str(file_list)]
         result = subprocess.run(command, capture_output=True, text=True)
@@ -253,6 +267,13 @@ def archive(case: Path, args) -> None:
     jobs = running_jobs(case)
     if jobs:
         raise ValueError(f"Slurm job(s) {', '.join(jobs)} are running in {case}")
+    # A job submitted from another directory is not matched above, so also
+    # refuse while the solver log is still being written.
+    recent = [f for f in (case / "log.solids4Foam", case / "log.Allrun")
+              if f.is_file() and dt.datetime.now().timestamp() - f.stat().st_mtime < args.quiet_minutes * 60]
+    if recent and not args.force_active:
+        raise ValueError(f"{recent[0].name} changed in the last {args.quiet_minutes:g} min: is the run still "
+                         "going? (--force-active to archive anyway)")
 
     period = args.period or cycle_period(case)
     delta_t = float(foam_entry(case / "system/controlDict", "deltaT") or 1e-6)
@@ -280,13 +301,20 @@ def archive(case: Path, args) -> None:
         meta = json.loads(results.read_text(encoding="utf-8"))
         if Path(meta.get("runCase", "")).resolve() != case:
             raise ValueError(f"{results} was extracted from {meta.get('runCase')}, not {case}")
+        extracted_last = meta.get("lastWriteTime_s", meta.get("lastTime_s"))
+        if extracted_last is None or abs(extracted_last - last) > max(tol, 1e-9):
+            raise ValueError(f"{results} was extracted at t = {extracted_last}, but the run is now at "
+                             f"t = {last:g}: extract it again (--force)")
 
     def reconstructed(t):
         d = next((p for tt, p in root_times.items() if abs(tt - t) <= tol), None)
         return d is not None and all((d / r).is_dir() for r in ("fluid", "solid"))
 
     missing = [t for t in wanted if t > tol and not reconstructed(t)]
-    if missing:
+    if missing and args.dry_run:
+        print(f"  dry run: would reconstructPar t = {min(missing):g} to {max(missing):g}; the size below "
+              "leaves those times out")
+    elif missing:
         if not proc_times:
             raise ValueError(f"times {missing} are neither reconstructed nor decomposed")
         reconstruct(case, min(missing), max(missing))
@@ -303,12 +331,18 @@ def archive(case: Path, args) -> None:
     members = collect(case, keep, drop, meshing)
     total = sum(src.stat().st_size for src, _ in members)
 
-    args.archive_dir.mkdir(parents=True, exist_ok=True)
     target = args.archive_dir / f"{name}.tar.zst"
     manifest_path = args.archive_dir / f"{name}.manifest.json"
     if target.exists() and not args.force:
         raise FileExistsError(f"{target} exists (--force to replace it)")
-    free = shutil.disk_usage(args.archive_dir).free
+    if target.exists() and manifest_path.is_file():
+        source = json.loads(manifest_path.read_text(encoding="utf-8")).get("source")
+        if source and Path(source).resolve() != case:
+            raise FileExistsError(f"{target} holds a different case ({source}); not replacing it")
+    existing = args.archive_dir
+    while not existing.exists():
+        existing = existing.parent
+    free = shutil.disk_usage(existing).free
     kept_times = sorted(float(p.name) for p in keep)
     print(f"  {len(members)} files, {human(total)} before compression; "
           f"times {', '.join(f'{t:g}' for t in kept_times[:3])}"
@@ -320,6 +354,7 @@ def archive(case: Path, args) -> None:
         print("  dry run: nothing written")
         return
 
+    args.archive_dir.mkdir(parents=True, exist_ok=True)
     print(f"  writing {target}")
     write_archive(members, target, args.level)
     size = target.stat().st_size
@@ -334,7 +369,8 @@ def archive(case: Path, args) -> None:
         "uncompressedBytes": total,
         "period_s": period,
         "lastTime_s": last,
-        "keptTimes_s": kept_times,
+        "cycle_s": [start, last],
+        "keptTimes_s": kept_times,  # includes the 0 directory
         "droppedFields": drop,
         "meshingDirectory": str(meshing) if meshing else None,
         "files": [{"name": arc, "bytes": src.stat().st_size} for src, arc in members],
@@ -343,8 +379,8 @@ def archive(case: Path, args) -> None:
     print(f"  checked: {len(members)} files, {human(size)} compressed ({size / total:.0%}); "
           f"manifest {manifest_path.name}")
 
-    if results.is_file():
-        meta = json.loads(results.read_text(encoding="utf-8"))
+    meta = json.loads(results.read_text(encoding="utf-8")) if results.is_file() else {}
+    if Path(meta.get("runCase", "/nonexistent")).resolve() == case:
         meta["archive"] = {"path": str(target), "sha256": digest, "created": manifest["created"],
                            "keptTimes_s": [kept_times[0], kept_times[-1]], "count": len(kept_times)}
         results.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
@@ -385,6 +421,10 @@ def main() -> int:
     delete = parser.add_mutually_exclusive_group()
     delete.add_argument("--delete", action="store_true", help="delete the run case after a checked archive, without asking")
     delete.add_argument("--keep", action="store_true", help="never delete the run case")
+    parser.add_argument("--quiet-minutes", type=float, default=15,
+                        help="refuse if the solver log changed this recently (default 15)")
+    parser.add_argument("--force-active", action="store_true",
+                        help="archive even if the solver log changed recently")
     args = parser.parse_args()
     args.archive_dir = args.archive_dir.resolve()
     args.results_dir = args.results_dir.resolve()
