@@ -162,7 +162,8 @@ by about a factor of five while the mean thickness changes by under 0.001%.
 
 `maxCellSize` in `template/templateMesh/fluidMeshing/system/meshDict` sets the global
 cell size, and `add_refinements.py` adds the local refinement each geometry
-needs. The default is 0.8 mm. Across 20 test geometries it meshed more of them,
+needs. The default is 0.8 mm; `--max-cell-size VALUE` (in the units of the
+input STL) overrides it for one run. Across 20 test geometries it meshed more of them,
 and gave more clean solids, than any coarser size; a geometry without small
 branches will usually mesh coarser, but check each one before relying on it.
 Nothing is placed by hand, so the dictionary carries no coordinates tied to one
