@@ -278,7 +278,19 @@ The fluid pressure and the Windkessel pressures are likewise initialised at the 
 The coupled problem was solved with the finite-volume toolbox solids4foam \citep{cardiff2018opensource,tukovic2018openfoam}, built on OpenFOAM \todo{version}.
 The two domains were coupled with a partitioned, strongly coupled Robin--Neumann scheme \citep{tukovic2019added}.
 This coupling scheme proved to be effective for dealing with the strong added mass effect present in arterial simulations as the solid and fluid densities are similar.
-At the fluid--solid interface the velocity and displacement 
+The fluid side boundary conditions are set by the kinematic condition, wherein the fluid velocity and displacement is set equal to the solid velocity and displacement.
+An additional Robin interface condition for pressure is obtained through approximating the fluid pressure by the solid inertia.
+\begin{equation}
+  \vect{v}_{F,i} = \vect{v}_{S,i}
+  \qquad
+  \vect{u}_{F,i} = \vect{u}_{S,i}
+  \qquad
+  p \approx \rho_s h_s \frac{\partial \vect{v}_{S,n}}{\partial t}
+  \label{eq:fluidBC}
+\end{equation}
+Where $\vect{v}_{F,i}$ is the fluid velocity at the interface, $\vect{v}_{S,i}$ is the solid velocity at the interface, $\vect{u}_{F,i}$ is the fluid displacement at the interface, $\vect{u}_{S,i}$ is the solid displacement at the interface, $p$ is the fluid pressure, $\rho_s$ is the solid density, $h_s$ is the solid thickness, $\frac{\partial \vect{v}_{S,n}}{\partial t}$ is the solid normal acceleration.
+The solid thickness is calculated according to \todo{todo}.
+For the solid interface conditions, the traction calculated on the fluid side is applied as a boundary condition for the solid.
 \todo{one or two sentences on the Robin condition and how its coefficient is obtained (\texttt{elasticWallPressure}, secant estimate); cite the formulation}.
 Coupling iterations within a time step were repeated until the relative interface residual fell below \num{1e-5}, with at most 30 iterations per step.
 
