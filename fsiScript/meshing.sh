@@ -172,6 +172,7 @@ if [[ $# -eq 0 ]]; then
     echo "       [--no-prestress] [--prestress-tolerance-fraction VALUE]" >&2
     echo "       [--prestress-max-passes N] [--prestress-pressure-step MMHG]" >&2
     echo "       [--normal-smoothing-passes N] [--wall-layers N]" >&2
+    echo "       [--max-cell-size VALUE]" >&2
     exit 2
 fi
 
@@ -242,6 +243,9 @@ saddle_iterations=""
 normal_smoothing_passes=""
 # Cells across the solid wall (nLayers of varExtrudeMesh)
 wall_layers="3"
+# cfMesh maxCellSize of the fluid mesh, in the units of the input STL (before
+# --scale-factor); empty keeps the value in the meshDict template
+max_cell_size=""
 
 # Read the output-related options without removing them from the array that is
 # passed to pulmonary_centerlines.py. Both --option value and --option=value
@@ -666,6 +670,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --wall-layers=*)
             wall_layers="${argument#*=}"
             ;;
+        --max-cell-size)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --max-cell-size requires a value" >&2
+                exit 2
+            }
+            max_cell_size="${arguments[$index]}"
+            ;;
+        --max-cell-size=*)
+            max_cell_size="${argument#*=}"
+            ;;
     esac
 done
 
@@ -721,6 +736,11 @@ if [[ ! "$wall_layers" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 echo "Solid wall: $wall_layers cells across the thickness"
+if [[ -n "$max_cell_size" ]] &&
+    ! awk -v v="$max_cell_size" 'BEGIN { exit !(v ~ /^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$/ && v + 0 > 0) }'; then
+    echo "Error: --max-cell-size must be a positive number, not '$max_cell_size'" >&2
+    exit 2
+fi
 
 # The two formulations need different interface conditions, so each has its own
 # case template. Robin cases are named with a Robin suffix so both can be
@@ -1023,10 +1043,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes|--wall-layers)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes|--wall-layers|--max-cell-size)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*|--wall-layers=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*|--wall-layers=*|--max-cell-size=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -1083,6 +1103,7 @@ print_settings() {
         "Saddle smoothing:" "$saddle_dilation rings, $saddle_iterations passes" \
         "Extrusion-normal smoothing:" "adaptive, after $normal_smoothing_passes uniform passes" \
         "Cells across the wall:" "$wall_layers" \
+        "Fluid maxCellSize:" "${max_cell_size:-$(sed -n -E 's/^[[:space:]]*maxCellSize[[:space:]]+([^;]+);.*/\1/p' "$SCRIPT_DIR/template/templateMesh/fluidMeshing/system/meshDict" | head -n 1) (template)}" \
         "Cells per radius:" "$cells_per_radius" \
         "Sphere radius factor:" "$sphere_radius_factor" \
         "Max refinement levels:" "$maximum_refinement_levels" \
@@ -1172,6 +1193,13 @@ fi
 if [[ ! -f "$mesh_dict" ]]; then
     echo "Error: copied meshDict not found: $mesh_dict" >&2
     exit 1
+fi
+if [[ -n "$max_cell_size" ]]; then
+    sed -i -E "s/^([[:space:]]*maxCellSize[[:space:]]+)[^;]+;/\1$max_cell_size;/" "$mesh_dict"
+    if ! grep -Eq "^[[:space:]]*maxCellSize[[:space:]]+$max_cell_size;" "$mesh_dict"; then
+        echo "Error: could not set maxCellSize in $mesh_dict" >&2
+        exit 1
+    fi
 fi
 
 mkdir -p "$surface_dir"
