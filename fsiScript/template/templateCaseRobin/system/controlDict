@@ -56,6 +56,9 @@ functions
     // Flow rate through each lung and each outlet, written by meshing.sh
     #includeIfPresent "lungFlows"
 
+    // Fluid volume, kinetic energy, viscous dissipation and helicity
+    #include "fluidMetrics"
+
     // displacement
     // {
     //     type            solidPointDisplacement;
@@ -68,21 +71,6 @@ functions
          historyPatch    innerWall;
      }
 
-           pressureProbe
-     {
-       type probes;
-       region fluid;
-       libs (sampling);
-       
-       writeControl timeStep;
-       writeInterval 1;
-       
-       fields (p);
-       probeLocations
-	 (
-	   	   (0.04 -0.008 0.065) //MPA
-	  );
-     }
     solidForce
     {
         type           solidForces;
@@ -130,10 +118,9 @@ functions
 
         // Optional (inherited) entries
         writePrecision  10;
-	// writeControl    writeTime;
-        // writeInterval   -1;
-	writeControl    runTime;
-	writeInterval   0.05;
+        // Written with the fields, so the accumulated WSS fields land on
+        // the same cycle-aligned times that purgeWrite keeps.
+        writeControl    writeTime;
 
     }
 
@@ -150,10 +137,9 @@ functions
 
         // Optional (inherited) entries
         writePrecision  10;
-        // writeControl    writeTime;
-        // writeInterval   -1;
-	writeControl    runTime;
-	writeInterval   0.05;
+        // Written with the fields, so the accumulated WSS fields land on
+        // the same cycle-aligned times that purgeWrite keeps.
+        writeControl    writeTime;
 
     }        
 

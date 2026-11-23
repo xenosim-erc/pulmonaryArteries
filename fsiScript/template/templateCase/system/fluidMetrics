@@ -1,0 +1,107 @@
+// Volume integrals over the fluid at every time step, included by
+// system/controlDict. Compiled by OpenFOAM the first time the case runs (into
+// dynamicCode/). Everything is per unit density, as the solver is
+// incompressible: multiply by rho (constant/fluid/transportProperties) to get
+// energies in J and power in W.
+//
+// Output: postProcessing/fluid/fluidMetrics/<startTime>/fluidMetrics.dat
+//   volume         fluid (lumen) volume                 int dV              [m^3]
+//   kineticEnergy  kinetic energy / rho                 int 0.5|U|^2 dV     [m^5/s^2]
+//   dissipation    viscous dissipation rate / rho       int 2 nuEff D:D dV  [m^5/s^3]
+//                  (D = symm(grad U); integrated over a cycle, times rho, it
+//                  is the viscous energy loss)
+//   helicity       int U.(curl U) dV                                        [m^4/s^2]
+//   absHelicity    int |U.(curl U)| dV                                      [m^4/s^2]
+//   maxMagU        peak velocity magnitude                                  [m/s]
+
+fluidMetrics
+{
+    type            coded;
+    libs            (utilityFunctionObjects);
+    name            fluidMetrics;
+    region          fluid;
+    writeControl    timeStep;
+    writeInterval   1;
+
+    codeOptions
+    #{
+        -I$(LIB_SRC)/finiteVolume/lnInclude \
+        -I$(LIB_SRC)/meshTools/lnInclude \
+        -I$(LIB_SRC)/TurbulenceModels/turbulenceModels/lnInclude \
+        -I$(LIB_SRC)/TurbulenceModels/incompressible/lnInclude \
+        -I$(LIB_SRC)/transportModels \
+        -I$(LIB_SRC)/transportModels/incompressible/singlePhaseTransportModel
+    #};
+
+    codeLibs
+    #{
+        -lfiniteVolume \
+        -lmeshTools \
+        -lturbulenceModels \
+        -lincompressibleTurbulenceModels \
+        -lincompressibleTransportModels
+    #};
+
+    codeInclude
+    #{
+        #include "turbulentTransportModel.H"
+        #include "fvc.H"
+        #include "OFstream.H"
+    #};
+
+    codeData
+    #{
+        autoPtr<OFstream> filePtr_;
+    #};
+
+    codeExecute
+    #{
+        const fvMesh& m = mesh();
+        const volVectorField& U = m.lookupObject<volVectorField>("U");
+        const incompressible::turbulenceModel& turbulence =
+            m.lookupObject<incompressible::turbulenceModel>
+            (
+                turbulenceModel::propertiesName
+            );
+
+        // devReff = -nuEff dev(twoSymm(grad U)), so -devReff && grad U is
+        // 2 nuEff D:D for a divergence-free velocity.
+        const volTensorField gradU(fvc::grad(U));
+        const scalarField dissipation
+        (
+            -(turbulence.devReff()().primitiveField() && gradU.primitiveField())
+        );
+        const scalarField h(U.primitiveField() & fvc::curl(U)().primitiveField());
+
+        const scalarField& V = m.V();
+        const scalar volume = gSum(V);
+        const scalar kineticEnergy = 0.5*gSum(V*magSqr(U.primitiveField()));
+        const scalar dissipationRate = gSum(V*dissipation);
+        const scalar helicity = gSum(V*h);
+        const scalar absHelicity = gSum(V*mag(h));
+        const scalar maxMagU = gMax(mag(U.primitiveField()));
+
+        if (Pstream::master())
+        {
+            if (!filePtr_)
+            {
+                const fileName dir
+                (
+                    time().globalPath()/"postProcessing"/"fluid"/name()
+                   /time().timeName(time().startTime().value())
+                );
+                mkDir(dir);
+                filePtr_.reset(new OFstream(dir/"fluidMetrics.dat"));
+                filePtr_()
+                    << "# Time\tvolume\tkineticEnergy\tdissipation"
+                    << "\thelicity\tabsHelicity\tmaxMagU" << nl;
+                filePtr_().precision(10);
+            }
+
+            filePtr_()
+                << time().value() << tab << volume << tab << kineticEnergy
+                << tab << dissipationRate << tab << helicity
+                << tab << absHelicity << tab << maxMagU << endl;
+        }
+    #};
+}

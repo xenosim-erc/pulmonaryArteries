@@ -163,7 +163,7 @@ if [[ $# -eq 0 ]]; then
     echo "       [--compliance-pressure-step MMHG] [--no-compliance-correction]" >&2
     echo "       [--left-axis +x|-x|+y|-y|+z|-z] [--lung-sides FILE]" >&2
     echo "       [--animal human|pig] [--inlet-flow NAME|FILE]" >&2
-    echo "       [--heartbeats N] [--cores N]" >&2
+    echo "       [--heartbeats N] [--cycle-snapshots N] [--cores N]" >&2
     echo "       [--wall-model neoHookeanElastic|isotropicFungElastic]" >&2
     echo "       [--wall-density VALUE] [--wall-youngs-modulus VALUE]" >&2
     echo "       [--wall-poisson-ratio VALUE] [--wall-fung-c VALUE]" >&2
@@ -205,6 +205,9 @@ compliance_pressure_step=""
 animal=""
 inlet_flow=""
 heartbeats=""
+# Fields are written this many times per cardiac cycle, and only the last
+# cycle is kept (purgeWrite), so last-cycle averages can be taken exactly.
+cycle_snapshots="40"
 cores=""
 cells_per_radius="3.0"
 sphere_radius_factor="4.0"
@@ -435,6 +438,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --heartbeats=*)
             heartbeats="${argument#*=}"
+            ;;
+        --cycle-snapshots)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --cycle-snapshots requires a value" >&2
+                exit 2
+            }
+            cycle_snapshots="${arguments[$index]}"
+            ;;
+        --cycle-snapshots=*)
+            cycle_snapshots="${argument#*=}"
             ;;
         --cores)
             index=$((index + 1))
@@ -960,6 +974,18 @@ require_positive_number "$cycle_period" "the cycle length in $inlet_flow_file"
 end_time="$(awk -v n="$heartbeats" -v t="$cycle_period" 'BEGIN { printf "%.10g", n * t }')"
 echo "Heartbeats: $heartbeats x ${cycle_period} s, endTime $end_time"
 
+# Write fields cycle_snapshots times per cycle and keep only the newest
+# cycle_snapshots + 1 time directories: the whole last cycle, both ends
+# included. The wall-shear function objects write at the same times, so the
+# accumulated WSS fields at the two ends give last-cycle TAWSS and OSI.
+if ! [[ "$cycle_snapshots" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --cycle-snapshots must be a positive integer, not '$cycle_snapshots'" >&2
+    exit 2
+fi
+write_interval="$(awk -v t="$cycle_period" -v n="$cycle_snapshots" 'BEGIN { printf "%.10g", t / n }')"
+purge_write=$((cycle_snapshots + 1))
+echo "Field writes: every $write_interval s ($cycle_snapshots per cycle), last cycle kept"
+
 # Both regions are decomposed into the same number of subdomains, and the
 # Slurm job asks for one task per subdomain.
 if [[ -z "$cores" ]]; then
@@ -1043,10 +1069,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes|--wall-layers|--max-cell-size)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cycle-snapshots|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes|--wall-layers|--max-cell-size)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*|--wall-layers=*|--max-cell-size=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cycle-snapshots=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*|--wall-layers=*|--max-cell-size=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -1111,6 +1137,7 @@ print_settings() {
         "Mesh scale factor:" "$scale_factor" \
         "Animal:" "${animal:-none, values set by hand} (inlet flow: $inlet_flow_source)" \
         "Heartbeats:" "$heartbeats x $cycle_period s (endTime $end_time)" \
+        "Field writes:" "$cycle_snapshots per cycle (every $write_interval s), purgeWrite $purge_write" \
         "Cores:" "$cores" \
         "Windkessel Rp [Pa s/m^3]:" "$wk_proximal_resistance" \
         "Windkessel Rd [Pa s/m^3]:" "$wk_distal_resistance" \
@@ -1826,6 +1853,17 @@ if ! grep -Eq "^[[:space:]]*endTime[[:space:]]+$end_time;" "$run_control_dict"; 
     exit 1
 fi
 echo "Set endTime to $end_time s ($heartbeats heartbeat(s))"
+
+sed -i -E \
+    -e "s/^(writeInterval[[:space:]]+)[^;]*;/\1$write_interval;/" \
+    -e "s/^(purgeWrite[[:space:]]+)[^;]*;/\1$purge_write;/" \
+    "$run_control_dict"
+if ! grep -Eq "^writeInterval[[:space:]]+$write_interval;" "$run_control_dict" ||
+   ! grep -Eq "^purgeWrite[[:space:]]+$purge_write;" "$run_control_dict"; then
+    echo "Error: could not set writeInterval/purgeWrite in $run_control_dict" >&2
+    exit 1
+fi
+echo "Set writeInterval to $write_interval s, purgeWrite $purge_write"
 
 for decompose_dict in "$run_case"/system/decomposeParDict \
                       "$run_case"/system/{fluid,solid}/decomposeParDict \

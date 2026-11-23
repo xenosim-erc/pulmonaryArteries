@@ -315,6 +315,16 @@ and sets `endTime` in `system/controlDict` to that many cycles. The cycle
 length is the last time in the waveform file, so 3 heartbeats is 2.58 s for a
 human case and 1.98 s for a porcine one.
 
+Fields are written `--cycle-snapshots` times per cycle (default 40, so every
+0.0215 s for a human case and 0.0165 s for a porcine one), and `purgeWrite` is
+set to one more than that, so only the last cycle is kept on disk, both ends
+included. The wall-shear-stress and OSI function objects write at the same
+times. The OSI function object integrates WSS and |WSS| from t = 0 and writes
+both running integrals, so last-cycle TAWSS and OSI come from the difference
+between the integrals at the two ends of the kept cycle. The per-time-step
+histories in `postProcessing/` are not purged and cover every cycle, so
+cycle-to-cycle periodicity can still be checked.
+
 ### Settings and provenance
 
 When run interactively, `meshing.sh` prompts for every setting not given as a
@@ -429,9 +439,20 @@ In the run case:
 
 - each outlet patch joins the patch group `LPA` or `RPA` in
   `constant/fluid/polyMesh/boundary`;
-- `system/lungFlows`, included by `system/controlDict`, records the flow rate
-  through each lung and each outlet at every time step, in
-  `postProcessing/fluid/{LPAFlow,RPAFlow,outlet<N>Flow}`.
+- `system/lungFlows`, included by `system/controlDict`, records at every time
+  step the flow rate and the area-averaged pressure through the inlet, each
+  lung and each outlet, in
+  `postProcessing/fluid/{inlet,LPA,RPA,outlet<N>}{Flow,Pressure}`. The
+  pressure is kinematic (p/rho, m²/s²), and the inlet flow is negative, so
+  `inletFlow + LPAFlow + RPAFlow` is the mass-balance error.
+
+Every case also includes `system/fluidMetrics`, a coded function object that
+OpenFOAM compiles into `dynamicCode/` on the first run. At every time step it
+writes the fluid volume, kinetic energy, viscous dissipation rate
+(∫ 2 νEff D:D dV), helicity (∫ U·ω dV and ∫ |U·ω| dV) and peak |U| to
+`postProcessing/fluid/fluidMetrics/<startTime>/fluidMetrics.dat`. Everything is
+per unit density, so multiply by rho for energies in J and power in W;
+the dissipation rate integrated over a cycle is the viscous energy loss.
 
 After a run, `pythonScripts/lung_flow_split.py RUN_CASE...` reports for the
 last complete cycle:
@@ -532,6 +553,83 @@ they are scaled with `transformPoints -scale`, by `--scale-factor` (default
 unscaled. Only the run-case copies are scaled; the meshes in `caseFiles/` keep
 the STL units.
 
+## Results
+
+`pythonScripts/extract_results.py RUN_CASE...` (run it with the `fsi-env`
+Python) reads a finished run case in place, decomposed or reconstructed, and
+writes its results to `results/<case>/`:
+
+| File | Contents |
+| --- | --- |
+| `metadata.json` | provenance: `meshing.params`, cycle period, density, solver versions, the last-cycle window, how TAWSS/OSI were computed, warnings |
+| `timeseries.csv` | every time step of every cycle: inlet, lung and outlet flow (mL/s) and pressure (mmHg), fluid volume, kinetic energy, dissipation, helicity, FSI iterations |
+| `summary.json` | the scalar results below |
+| `wall_cycleAvg.vtp` | last-cycle fields on the undeformed wall: TAWSS, OSI, RRT, ECAP, mean WSS vector, mean and amplitude of pressure, displacement (mean, max, cyclic), peak-systolic WSS, pressure and displacement |
+| `wall_phases.pvd`, `wall_phases/` | the wall at every 4th write time of the last cycle (`--phase-stride`) and at peak systole and end-diastole: WSS, pressure, displacement |
+| `solid_{innerWall,outerWall}_{peakSystole,endDiastole}.vtp` | the solid wall surfaces: D, sigmaEq, sigma, largest principal Green strain |
+| `setup/`, `logs/` | the case's input dictionaries, and its logs gzipped |
+
+It also adds the case's row to `results/summary.csv`, one row per case,
+replacing any earlier row for the same case. The scalars are, over the last
+cycle: systolic, diastolic, mean and pulse pressure at the inlet, each lung and
+each outlet; mean and peak flow and reverse-flow fraction; the LPA share of the
+flow (mean and at peak systole); mass-balance error; inlet resistance and the
+mean pressure drop to each lung; viscous energy loss; kinetic energy and
+helicity; fluid stroke volume; area-weighted TAWSS and OSI statistics and the
+area fractions with low TAWSS (< 0.4 Pa), high OSI (> 0.2) and high ECAP
+(> 1.4 /Pa) (thresholds set by `--low-tawss`, `--high-osi`, `--high-ecap`);
+wall displacement; wall stress and cyclic strain; FSI iterations; and how
+periodic the last cycle is (largest change from the cycle before, relative to
+the range). Column names carry their units.
+
+Peak systole is the time of peak inflow and end-diastole that of the lowest
+inlet pressure. Pressures and wall shear stresses are kinematic in the solver
+and are multiplied by rho from `constant/fluid/transportProperties`. TAWSS and
+OSI are exact when write times fall on both ends of the last cycle, as
+`meshing.sh` arranges (see Inlet flow rate); otherwise they come from the WSS
+snapshots and `metadata.json` says so. OpenFOAM's wall shear stress points
+against the near-wall flow, so the mean WSS vector does too.
+
+The files are float32 and the phases are thinned, so a case takes roughly
+100-250 MB; the full last cycle stays in the archived run case. `results/` is
+ignored by Git, like `run/`.
+
+## Archiving finished runs
+
+Once its results are extracted, `pythonScripts/archive_run.py RUN_CASE...`
+moves a finished run case to the HDD, keeping only its last cycle. It writes
+`/mnt/backup/$USER/fsiRuns/<case>.tar.zst` (`--archive-dir`) and a
+`<case>.manifest.json` beside it listing every file, the kept times and the
+archive's sha256. The archive holds the reconstructed case: the setup files
+and logs, `constant/`, `system/`, `0/`, the last cycle's time directories (both
+ends), `postProcessing/` with every cycle, the set-up and logs of `prestress/`
+and `windkessel/`, and the top-level files of the meshing directory (STL,
+centerlines, profiles) under `meshing/`. It leaves out the processor
+directories, `dynamicCode/` and any earlier cycles, and drops fields that only
+a restart needs or that can be recomputed from what is kept (`Uf`, `meshPhi`,
+`cellMotionU`, `pointMotionU`, `F_`, `Ff_`, `sigmaHyd`, `*_0`; about 45% of each
+time directory; `--keep-all-fields` keeps them). The archive is not meant for
+restarting the run, but `extract_results.py` runs on it unpacked and gives the
+same results.
+
+Before writing it checks that the run reached `endTime` (`--allow-incomplete`),
+that no Slurm job of yours is running in the case, and that `results/<case>/`
+was extracted from this case (`--skip-results-check`). Any last-cycle times
+that are not yet reconstructed (Allrun reconstructs at the end, so only if the
+job died before that) are reconstructed with `reconstructPar`. The archive is
+written under a temporary name and listed back, every file's size compared,
+before it takes the final name, so `--force` never replaces a good archive
+with a bad one. The archive's path and checksum are added to
+`results/<case>/metadata.json`. Only then is the run case deleted: after a
+prompt, straight away with `--delete`, or never with `--keep`. `--dry-run`
+reports the files, size and free space without writing anything. The meshing
+directory (`caseFiles/<case>`) is not deleted.
+
+The free space it checks is the disk's, not your quota on it (`quota -s`).
+
+    .env/fsi-env/bin/python pythonScripts/extract_results.py run/<case>
+    python3 pythonScripts/archive_run.py run/<case>
+
 ## What is version-controlled
 
 - `geometries/`: input STL surfaces, in `human/` and `porcine/`
@@ -544,7 +642,8 @@ the STL units.
 - `environment.yml`: the Python dependency specification
 
 The local Conda installation and environment (`.env/`), intermediate meshing
-files (`caseFiles/`), and assembled solver cases (`run/`) are generated locally
+files (`caseFiles/`), assembled solver cases (`run/`) and extracted results
+(`results/`) are generated locally
 and ignored by Git. These directories are large, machine-specific, or
 reproducible from the tracked inputs.
 
