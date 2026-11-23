@@ -330,6 +330,79 @@ def periodicity(t, v, end, period, tol):
     return float(np.max(np.abs(v1 - previous)) / spread) if spread > 0 else math.nan
 
 
+def beat_table(times, table, period, end, tol) -> list[dict]:
+    """One row per complete beat (counted back from the end of the last
+    cycle): means, systolic/diastolic pressures, flows, the outlet pressure
+    at both ends of the beat, lumen volume, energy loss and FSI iterations."""
+    rows = []
+    n_beats = int(math.floor((end + tol) / period))
+    for k in range(n_beats):
+        start, stop = end - (n_beats - k) * period, end - (n_beats - k - 1) * period
+        row = {"beat": k + 1, "start_s": start, "end_s": stop}
+        for name in sorted(table):
+            t, v = window(times, table[name], start, stop, tol)
+            if len(t) < 3 or t[0] > start + 2 * tol or t[-1] < stop - 2 * tol:
+                continue
+            if name.startswith("p_") and name.endswith("_mmHg"):
+                where = name[2:-5]
+                row[f"p_{where}_mean_mmHg"] = cycle_mean(t, v, period)
+                row[f"p_{where}_sys_mmHg"] = float(v.max())
+                row[f"p_{where}_dia_mmHg"] = float(v.min())
+                row[f"p_{where}_endMinusStart_mmHg"] = float(v[-1] - v[0])
+            elif name.startswith("Q_") and name.endswith("_mLps"):
+                row[f"Q_{name[2:-5]}_mean_mLps"] = cycle_mean(t, -v if name == "Q_inlet_mLps" else v, period)
+            elif name == "volume_mL":
+                row["volume_mean_mL"] = cycle_mean(t, v, period)
+                row["volume_endMinusStart_mL"] = float(v[-1] - v[0])
+            elif name == "dissipation_mW":
+                row["energyLoss_mJ"] = float(trapz(v, t))
+            elif name == "nFsiCorrectors":
+                row["nFsiCorrectors_mean"] = float(v.mean())
+        rows.append(row)
+    return rows
+
+
+def windkessel_decay_per_beat(case: Path, period: float) -> float | None:
+    """exp(-T / (R C)) of the outlet Windkessels: how much a starting error in
+    the compliance charge shrinks per beat (every outlet has the same R C)."""
+    path = case / "0/fluid/windkesselOutlets"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    r = re.search(r"\bR\s+([-+0-9.eE]+)\s*;", text)
+    c = re.search(r"\bC\s+([-+0-9.eE]+)\s*;", text)
+    if not (r and c):
+        return None
+    return math.exp(-period / (float(r.group(1)) * float(c.group(1))))
+
+
+def settling(beats: list[dict], tol_shape: float, tol_mean: float, decay: float | None) -> dict:
+    """Is the last beat periodic, and if not, how far off and how many more
+    beats are needed? The slow part decays geometrically, so with the means of
+    the last three beats, r = d_k / d_(k-1) is the decay per beat (compare with
+    the Windkessel's exp(-T/RC)) and the remaining error is d_k r / (1 - r)."""
+    out: dict = {}
+    if decay is not None:
+        out["windkessel_decayPerBeat"] = decay
+    key = "p_inlet_mean_mmHg"
+    means = [b[key] for b in beats if key in b]
+    if len(means) >= 2:
+        change = abs(means[-1] - means[-2]) / abs(means[-1]) if means[-1] else math.nan
+        out["meanChange_p_inlet"] = change
+    if len(means) >= 3:
+        d1, d2 = means[-2] - means[-3], means[-1] - means[-2]
+        if d1 and 0 < d2 / d1 < 1:
+            r = d2 / d1
+            out["settle_ratioPerBeat"] = r
+            out["settle_remaining_p_inlet_mmHg"] = abs(d2) * r / (1 - r)
+            target = tol_mean * abs(means[-1])
+            if abs(d2) > target:
+                out["settle_beatsNeeded"] = math.ceil(math.log(target / abs(d2)) / math.log(r))
+            else:
+                out["settle_beatsNeeded"] = 0
+    return out
+
+
 def cycle_summary(times, table, period, end, tol) -> tuple[dict, dict]:
     """Scalar results over the last cycle, and the times of peak systole and
     end-diastole."""
@@ -716,13 +789,31 @@ def extract_wall(foam: FoamCase, case: Path, out: Path, rho: float, period: floa
         disp.append(points_of(data) - x_ref)
     wss, pressure, disp = np.array(wss), np.array(pressure), np.array(disp)
 
-    # The OSI function object restarts its integrals from zero whenever the
-    # solver restarts. A restart before the cycle is harmless; one exactly at
-    # its start means the integral at the end covers the cycle alone; one
-    # inside it leaves only the snapshots.
-    restarts = [r for r in restart_times(case) if r > tol]
-    inside = [r for r in restarts if t0 + tol < r < t1 - tol]
-    at_start = any(abs(r - t0) <= tol for r in restarts)
+    # The original OSI function object restarts its integrals from zero when
+    # the solver restarts (later builds read them back). A restart before the
+    # cycle is harmless either way. For one at or inside the cycle, look at the
+    # integral of |WSS|, which can only grow: if it fell between the restart
+    # and the next write, it was reset. Reset at the cycle start: the integral
+    # at the end covers the cycle alone. Reset inside it: only the snapshots.
+    def was_reset(r):
+        if not acc_mag:
+            return True
+        later = foam.times[foam.times > r + tol]
+        if not len(later) or not np.any(np.abs(foam.times - r) <= tol):
+            return True
+        before = cell_array(foam.read(wall, float(r), [acc_mag]), acc_mag)
+        after = cell_array(foam.read(wall, float(later[0]), [acc_mag]), acc_mag)
+        if before is None or after is None:
+            return True
+        return bool(np.mean(after < before - 1e-12 * max(before.max(), 1e-300)) > 0.01)
+
+    restarts = [r for r in restart_times(case) if r > tol and t0 - tol <= r < t1 - tol]
+    reset = [r for r in restarts if was_reset(r)]
+    if restarts:
+        meta["solverRestartsInLastCycle"] = {f"{r:g}": ("integrals reset" if r in reset else "integrals continued")
+                                             for r in restarts}
+    inside = [r for r in reset if t0 + tol < r]
+    at_start = any(abs(r - t0) <= tol for r in reset)
     if inside:
         meta["warnings"].append(f"solver restart(s) at t = {inside} inside the last cycle reset the "
                                 "OSI running integrals")
@@ -838,6 +929,53 @@ def green_strain_max(F: np.ndarray) -> np.ndarray:
     return np.linalg.eigvalsh(E)[:, -1]
 
 
+def per_beat_wall(foam: FoamCase, case: Path, rho: float, period: float, tol: float) -> list[dict]:
+    """TAWSS, OSI and inner-wall stress for every beat whose two ends were
+    written (when purgeWrite keeps them), and how much each beat's maps
+    differ from the previous beat's."""
+    wall = "/fluid/patch/wall"
+    acc_vec = find_array(foam.cell_arrays, "accumulatedWallShearStress")
+    acc_mag = find_array(foam.cell_arrays, "accumulatedMagWallShearStress")
+    if wall not in foam.patches or not (acc_vec and acc_mag):
+        return []
+    boundaries = [t for t in foam.times if t > tol and abs(t / period - round(t / period)) * period <= tol]
+    boundaries = [0.0] + boundaries if len(boundaries) else []
+    if len(boundaries) < 3:
+        return []
+    area = face_areas(foam.read(wall, float(foam.times[0]), []))
+    restarts = {round(r, 6) for r in restart_times(case)}
+    integrals = {}
+    for b in boundaries[1:]:
+        data = foam.read(wall, float(b), [acc_vec, acc_mag])
+        integrals[b] = (cell_array(data, acc_vec), cell_array(data, acc_mag))
+    integrals[0.0] = (np.zeros_like(integrals[boundaries[1]][0]), np.zeros_like(integrals[boundaries[1]][1]))
+    rows, previous = [], None
+    for a, b in zip(boundaries, boundaries[1:]):
+        (va, ma), (vb, mb) = integrals[a], integrals[b]
+        if a > tol and round(a, 6) in restarts and np.mean(mb < ma) > 0.01:
+            va, ma = np.zeros_like(va), np.zeros_like(ma)   # integrals reset at a
+        mean_wss = (vb - va) * rho / period
+        tawss = (mb - ma) * rho / period
+        with np.errstate(divide="ignore", invalid="ignore"):
+            osi = np.clip(0.5 * (1 - np.linalg.norm(mean_wss, axis=1) / tawss), 0, 0.5)
+        ok = np.isfinite(tawss) & np.isfinite(osi)
+        row = {"beat": int(round(b / period)), "TAWSS_mean_Pa": float(np.average(tawss[ok], weights=area[ok])),
+               "OSI_mean": float(np.average(osi[ok], weights=area[ok]))}
+        if previous is not None:
+            pt, po = previous
+            norm = math.sqrt(np.sum(area[ok] * tawss[ok] ** 2))
+            row["TAWSS_relChange"] = math.sqrt(np.sum(area[ok] * (tawss[ok] - pt[ok]) ** 2)) / norm if norm else math.nan
+            row["OSI_rmsChange"] = math.sqrt(np.sum(area[ok] * (osi[ok] - po[ok]) ** 2) / area[ok].sum())
+        if "/solid/patch/innerWall" in foam.patches and "sigmaEq" in foam.cell_arrays:
+            face = foam.read("/solid/patch/innerWall", float(b), ["sigmaEq"])
+            s = cell_array(face, "sigmaEq")
+            if s is not None:
+                row["sigmaEq_innerWall_beatEnd_mean_kPa"] = float(np.average(s, weights=face_areas(face)) / 1e3)
+        rows.append(row)
+        previous = (tawss, osi)
+    return rows
+
+
 def extract_solid(foam: FoamCase, out: Path, events: dict, meta: dict) -> dict:
     """The solid's inner and outer wall surfaces at peak systole and
     end-diastole (the full volume stays in the archived run)."""
@@ -906,6 +1044,15 @@ def copy_setup(case: Path, out: Path):
             prefix = "prestress_" if src.parent.name == "prestress" else ""
             with src.open("rb") as fin, gzip.open(logs / f"{prefix}{src.name}.gz", "wb") as fout:
                 shutil.copyfileobj(fin, fout)
+
+
+def write_rows(path: Path, rows: list[dict]):
+    columns = list(dict.fromkeys(k for r in rows for k in r))
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: fmt(r.get(k, "")) for k in columns})
 
 
 def write_timeseries(path: Path, times, table, period):
@@ -1029,6 +1176,7 @@ def _extract(case: Path, name: str, out: Path, final: Path, previous_archive, ar
 
     summary: dict = {}
     events: dict = {}
+    beats: list[dict] = []
     if len(times):
         write_timeseries(out / "timeseries.csv", times, table, period)
         cycle, events = cycle_summary(times, table, period, end, tol)
@@ -1041,6 +1189,9 @@ def _extract(case: Path, name: str, out: Path, final: Path, previous_archive, ar
                 summary["oscillatoryPowerFraction_minusBaseline"] = (
                     summary["oscillatoryPowerFraction"] - summary["baseline_oscillatoryPowerFraction"])
         write_pv(out / "pv_inlet.csv", times, table, period, end, tol)
+        beats = beat_table(times, table, period, end, tol)
+        summary.update(settling(beats, args.periodic_tol, args.periodic_mean_tol,
+                                windkessel_decay_per_beat(case, period)))
     else:
         meta["warnings"].append("no function-object histories found in postProcessing/")
     if "peakSystole" not in events and len(field_times):
@@ -1051,6 +1202,31 @@ def _extract(case: Path, name: str, out: Path, final: Path, previous_archive, ar
     if foam is not None:
         summary.update(extract_wall(foam, case, out, rho, period, end, tol, events, args, meta))
         summary.update(extract_solid(foam, out, events, meta))
+        wall_beats = per_beat_wall(foam, case, rho, period, tol)
+        if wall_beats and len(times):
+            by_beat = {b["beat"]: b for b in beats}
+            for w in wall_beats:
+                by_beat.setdefault(w["beat"], {"beat": w["beat"]}).update(
+                    {f"wall_{k}": v for k, v in w.items() if k != "beat"})
+            beats = [by_beat[k] for k in sorted(by_beat)]
+            last_wall = wall_beats[-1]
+            if "TAWSS_relChange" in last_wall:
+                summary["periodicity_TAWSS_relChange"] = last_wall["TAWSS_relChange"]
+                summary["periodicity_OSI_rmsChange"] = last_wall["OSI_rmsChange"]
+    if len(times) and beats:
+        write_rows(out / "cycles.csv", beats)
+        shape = [v for k, v in summary.items() if k.startswith("periodicity_") and "TAWSS" not in k
+                 and "OSI" not in k and isinstance(v, float) and math.isfinite(v)]
+        mean_change = summary.get("meanChange_p_inlet", math.nan)
+        if shape and math.isfinite(mean_change):
+            summary["periodic"] = bool(max(shape) <= args.periodic_tol and mean_change <= args.periodic_mean_tol)
+            if not summary["periodic"]:
+                meta["warnings"].append(
+                    f"last beat not periodic: largest beat-to-beat change {max(shape):.2%} of range "
+                    f"(tolerance {args.periodic_tol:.0%}), inlet mean pressure change {mean_change:.2%} "
+                    f"(tolerance {args.periodic_mean_tol:.1%})"
+                    + (f"; about {summary['settle_beatsNeeded']} more beat(s) needed"
+                       if "settle_beatsNeeded" in summary else ""))
     copy_setup(case, out)
 
     (out / "summary.json").write_text(json.dumps(jsonable(summary), indent=2) + "\n", encoding="utf-8")
@@ -1080,6 +1256,10 @@ def main() -> int:
     parser.add_argument("--low-tawss", type=float, default=0.4, help="low-TAWSS threshold [Pa] (default 0.4)")
     parser.add_argument("--high-osi", type=float, default=0.2, help="high-OSI threshold (default 0.2)")
     parser.add_argument("--high-ecap", type=float, default=1.4, help="high-ECAP threshold [1/Pa] (default 1.4)")
+    parser.add_argument("--periodic-tol", type=float, default=0.01,
+                        help="largest beat-to-beat change allowed, as a fraction of the waveform range (default 0.01)")
+    parser.add_argument("--periodic-mean-tol", type=float, default=0.005,
+                        help="largest change in inlet mean pressure between the last two beats (default 0.005)")
     parser.add_argument("--phase-stride", type=int, default=4,
                         help="keep every Nth write time of the last cycle in wall_phases (default 4)")
     parser.add_argument("--series-end", action="store_true",

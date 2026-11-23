@@ -84,7 +84,9 @@ then
         --compliance "$outletCompliance" \
         --exponent "$flowSplitExponent" \
         --transport-properties constant/fluid/transportProperties \
-        --initial-pressure "$initialPressure" >> log.windkesselOutlets 2>&1
+        --initial-pressure "$initialPressure" \
+        ${settledStartWaveform:+--settled-start "$settledStartWaveform"} \
+        >> log.windkesselOutlets 2>&1
     then
         cat log.windkesselOutlets >&2
         echo "Could not split the Windkessel across the outlets." >&2

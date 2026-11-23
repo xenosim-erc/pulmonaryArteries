@@ -407,6 +407,25 @@ parallel (`1 / sum(1/R_i)`) and the compliances summed. It compares the results
 with the requested totals and stops if any differs by more than 1e-4. The
 comparison table is printed and saved in the run case's `log.windkesselOutlets`.
 
+#### Starting pressure
+
+The slowest part of the model to become periodic is the charge on the outlet
+compliances. It decays with the time constant `Rd C`, so a starting error
+shrinks by `exp(-T / (Rd C))` per beat: to 25% per beat for the human defaults
+(`Rd C` 0.63 s, `T` 0.86 s) but only 50% for the pig (`Rd C` 0.96 s, `T`
+0.66 s). Started at the imaging pressure, an outlet-only model takes about 5
+human or 7 pig beats to settle within 1%, more than the default 3 heartbeats.
+
+So by default (`--wk-start settled`) the outlets start at the pressure the
+Windkessel settles to at the start of a beat under the inflow waveform (6.1
+mmHg human, 14.6 mmHg pig with the defaults), worked out exactly by
+`windkessel_outlets.py --settled-start WAVEFORM` (one beat of the linear
+equation gives the fixed point). `Allrun` does the same when it splits the
+outlets again with the 3D wall compliance taken off. The fluid itself still
+starts at the imaging pressure, where the prestressed wall is in equilibrium;
+the difference settles within milliseconds. `--wk-start imaging` starts the
+outlets at the imaging pressure as before.
+
 ### Lung flow split
 
 `meshing.sh` assigns every outlet to the left or right lung
@@ -613,10 +632,25 @@ between species in the raw fraction comes from the inflow waveforms and the
 Windkessel parameters (with the template defaults the Windkessels alone give
 0.27 for human and 0.11 for pig).
 
-If the solver restarted during the last cycle, the OSI function object's
-running integrals restarted from zero (they are not read back on a restart), so
-TAWSS and OSI come from the snapshots instead, with a warning; a restart exactly
-at the cycle start is handled.
+If the solver restarted during the last cycle, the original OSI function object
+restarted its running integrals from zero (later builds read them back). The
+integral of |WSS| can only grow, so `extract_results.py` tells the two apart by
+whether it fell across the restart: if it was reset inside the cycle, TAWSS and
+OSI come from the snapshots instead, with a warning; a reset exactly at the
+cycle start is handled; and integrals that carried on are used as normal.
+
+Periodicity: `cycles.csv` has one row per beat (mean, systolic and diastolic
+pressures, flows, the change in outlet pressure and lumen volume over the beat,
+energy loss, FSI iterations; and, where both ends of a beat were written, its
+TAWSS and OSI and how much their maps changed from the beat before, and the
+inner-wall stress). `periodic` in the summary is true when the largest
+beat-to-beat change of the last beat is within `--periodic-tol` (1% of the
+waveform range) and the inlet mean pressure changed by less than
+`--periodic-mean-tol` (0.5%); otherwise there is a warning. With three or more
+beats, the decay per beat of the inlet mean pressure (`settle_ratioPerBeat`,
+compare with the Windkessel's `windkessel_decayPerBeat` = `exp(-T / (R C))`)
+gives an estimate of the error left (`settle_remaining_p_inlet_mmHg`) and of
+the beats still needed (`settle_beatsNeeded`).
 
 `python3 pythonScripts/plot_results.py` (system Python with matplotlib) writes
 `results/plots/`: inlet pressure against ejected volume (the ejection limb of a
