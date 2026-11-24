@@ -278,20 +278,23 @@ The fluid pressure and the Windkessel pressures are likewise initialised at the 
 The coupled problem was solved with the finite-volume toolbox solids4foam \citep{cardiff2018opensource,tukovic2018openfoam}, built on OpenFOAM \todo{version}.
 The two domains were coupled with a partitioned, strongly coupled Robin--Neumann scheme \citep{tukovic2019added}.
 This coupling scheme proved to be effective for dealing with the strong added mass effect present in arterial simulations as the solid and fluid densities are similar.
-The fluid side boundary conditions are set by the kinematic condition, wherein the fluid velocity and displacement is set equal to the solid velocity and displacement.
-An additional Robin interface condition for pressure is obtained through approximating the fluid pressure by the solid inertia.
+The fluid side boundary conditions are set by the kinematic condition (\cref{eq:fluidBC}), wherein the fluid velocity and displacement is set equal to the solid velocity and displacement.
 \begin{equation}
-  \vect{v}_{F,i} = \vect{v}_{S,i}
+  \vect{v}_{f,i} = \vect{v}_{s,i}
   \qquad
-  \vect{u}_{F,i} = \vect{u}_{S,i}
-  \qquad
-  p \approx \rho_s h_s \frac{\partial \vect{v}_{S,n}}{\partial t}
+  \vect{u}_{f,i} = \vect{u}_{s,i}
   \label{eq:fluidBC}
 \end{equation}
-Where $\vect{v}_{F,i}$ is the fluid velocity at the interface, $\vect{v}_{S,i}$ is the solid velocity at the interface, $\vect{u}_{F,i}$ is the fluid displacement at the interface, $\vect{u}_{S,i}$ is the solid displacement at the interface, $p$ is the fluid pressure, $\rho_s$ is the solid density, $h_s$ is the solid thickness, $\frac{\partial \vect{v}_{S,n}}{\partial t}$ is the solid normal acceleration.
-The solid thickness is calculated according to \todo{todo}.
+Where $\vect{v}_{f,i}$ is the fluid velocity at the interface, $\vect{v}_{s,i}$ is the solid velocity at the interface, $\vect{u}_{f,i}$ is the fluid displacement at the interface, $\vect{u}_{s,i}$ is the solid displacement at the interface.
+An additional Robin interface condition for pressure is obtained through approximating the fluid pressure by the solid inertia (\cref{eq:robinBC}).
+\begin{equation}
+  p^{k} + \frac{\rho_s h_s}{\rho_f} \left(\frac{\partial p}{\partial n}\right)^{k} = p^{\left(k-1\right)} - \rho_s h_s \left(\frac{\partial \vect{v}_{s,n}}{\partial t}\right)^{\left(k-1\right)}
+  \label{eq:robinBC}
+\end{equation}
+Where $p$ is the fluid pressure, $\rho_s$ is the solid density, $h_s$ is the solid thickness, $\rho_f$ is the fluid density and $\frac{\partial \vect{v}_{s,n}}{\partial t}$ is the solid normal acceleration.
+The solid thickness $h_s$ is approximated using the \textit{secant} method whereby the solid impedance is approximated by comparing changes in interface pressure with changes in solid/fluid normal acceleration.
+This is updated every FSI iteration in order to minimise the predicted contraction rate i.e. maximise rate of convergence.
 For the solid interface conditions, the traction calculated on the fluid side is applied as a boundary condition for the solid.
-\todo{one or two sentences on the Robin condition and how its coefficient is obtained (\texttt{elasticWallPressure}, secant estimate); cite the formulation}.
 Coupling iterations within a time step were repeated until the relative interface residual fell below \num{1e-5}, with at most 30 iterations per step.
 
 The fluid equations were solved with the PIMPLE algorithm (20 outer and 3 pressure correctors), with second-order linear-upwind interpolation for convection and first-order implicit Euler time integration.
