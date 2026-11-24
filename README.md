@@ -38,6 +38,11 @@ use. The FSI cases each include a `caseExplainer` file summarising the setup.
   distance (read from a point field), used to generate the variable-thickness
   solid wall around the fluid domain in the FSI cases. See
   `varExtrudeMesh/README`.
+- **`oscillatoryShearIndex/`** — Function object computing the oscillatory
+  shear index and the time-integrated wall shear stress used for TAWSS, loaded
+  by the FSI case templates. From solids4foam's oscillatoryShearIndex, changed
+  to carry its integrals over solver restarts. See
+  `oscillatoryShearIndex/README.md`.
 
 
 ## Requirements
@@ -60,7 +65,8 @@ directory:
 ./Allwmake
 ```
 
-This builds `mapExtrudeDistance` and `varExtrudeMesh` with `wmake`, and
+This builds `mapExtrudeDistance`, `varExtrudeMesh` and the
+`oscillatoryShearIndex` function object library with `wmake`, and
 provisions the fsiScript Python/VMTK environment (installing a local
 Miniforge to `fsiScript/.env/miniforge3` and creating the `fsi-env` conda
 environment from `fsiScript/environment.yml`, if not already present). It
@@ -70,5 +76,6 @@ for details on the fsi-env environment it creates.
 ## License
 
 GNU General Public License v3.0 or later — see `LICENSE`. The
-`mapExtrudeDistance` and `varExtrudeMesh` utilities are derived from OpenFOAM
-source and remain under the same license (see their source-file headers).
+`mapExtrudeDistance` and `varExtrudeMesh` utilities and the
+`oscillatoryShearIndex` library are derived from OpenFOAM source and remain
+under the same license (see their source-file headers).

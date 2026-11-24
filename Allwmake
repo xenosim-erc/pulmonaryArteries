@@ -6,7 +6,8 @@
 #
 # A working OpenFOAM and solids4foam installation must already be sourced;
 # this script does not install either. It only:
-#   1. builds mapExtrudeDistance and varExtrudeMesh with wmake;
+#   1. builds mapExtrudeDistance and varExtrudeMesh, and the
+#      oscillatoryShearIndex function object library, with wmake;
 #   2. installs a local Miniforge and creates fsiScript's fsi-env conda
 #      environment (VMTK/VTK/ITK) from fsiScript/environment.yml.
 
@@ -57,6 +58,9 @@ echo "==> Building mapExtrudeDistance"
 
 echo "==> Building varExtrudeMesh"
 ( cd "$SCRIPT_DIR/varExtrudeMesh" && wmake )
+
+echo "==> Building the oscillatoryShearIndex function object"
+( cd "$SCRIPT_DIR/oscillatoryShearIndex" && wmake libso )
 
 # ----------------------------------------------------------------------------
 # fsiScript Python/VMTK environment
@@ -114,6 +118,7 @@ fi
 echo
 echo "Allwmake finished successfully."
 echo "  - mapExtrudeDistance and varExtrudeMesh installed to \$FOAM_USER_APPBIN"
+echo "  - liboscillatoryShearIndex installed to \$FOAM_USER_LIBBIN"
 echo "  - fsiScript Python environment ready at: $FSI_ENV_DIR"
 if (( ${#missing_cfmesh[@]} > 0 )); then
     echo "  - Warning: cfMesh utilities missing from PATH: ${missing_cfmesh[*]}"

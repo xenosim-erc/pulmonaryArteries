@@ -315,6 +315,16 @@ and sets `endTime` in `system/controlDict` to that many cycles. The cycle
 length is the last time in the waveform file, so 3 heartbeats is 2.58 s for a
 human case and 1.98 s for a porcine one.
 
+Fields are written `--cycle-snapshots` times per cycle (default 40, so every
+0.0215 s for a human case and 0.0165 s for a porcine one), and `purgeWrite` is
+set to one more than that, so only the last cycle is kept on disk, both ends
+included. The wall-shear-stress and OSI function objects write at the same
+times. The OSI function object integrates WSS and |WSS| from t = 0 and writes
+both running integrals, so last-cycle TAWSS and OSI come from the difference
+between the integrals at the two ends of the kept cycle. The per-time-step
+histories in `postProcessing/` are not purged and cover every cycle, so
+cycle-to-cycle periodicity can still be checked.
+
 ### Settings and provenance
 
 When run interactively, `meshing.sh` prompts for every setting not given as a
@@ -397,6 +407,25 @@ parallel (`1 / sum(1/R_i)`) and the compliances summed. It compares the results
 with the requested totals and stops if any differs by more than 1e-4. The
 comparison table is printed and saved in the run case's `log.windkesselOutlets`.
 
+#### Starting pressure
+
+The slowest part of the model to become periodic is the charge on the outlet
+compliances. It decays with the time constant `Rd C`, so a starting error
+shrinks by `exp(-T / (Rd C))` per beat: to 25% per beat for the human defaults
+(`Rd C` 0.63 s, `T` 0.86 s) but only 50% for the pig (`Rd C` 0.96 s, `T`
+0.66 s). Started at the imaging pressure, an outlet-only model takes about 5
+human or 7 pig beats to settle within 1%, more than the default 3 heartbeats.
+
+So by default (`--wk-start settled`) the outlets start at the pressure the
+Windkessel settles to at the start of a beat under the inflow waveform (6.1
+mmHg human, 14.6 mmHg pig with the defaults), worked out exactly by
+`windkessel_outlets.py --settled-start WAVEFORM` (one beat of the linear
+equation gives the fixed point). `Allrun` does the same when it splits the
+outlets again with the 3D wall compliance taken off. The fluid itself still
+starts at the imaging pressure, where the prestressed wall is in equilibrium;
+the difference settles within milliseconds. `--wk-start imaging` starts the
+outlets at the imaging pressure as before.
+
 ### Lung flow split
 
 `meshing.sh` assigns every outlet to the left or right lung
@@ -429,9 +458,28 @@ In the run case:
 
 - each outlet patch joins the patch group `LPA` or `RPA` in
   `constant/fluid/polyMesh/boundary`;
-- `system/lungFlows`, included by `system/controlDict`, records the flow rate
-  through each lung and each outlet at every time step, in
-  `postProcessing/fluid/{LPAFlow,RPAFlow,outlet<N>Flow}`.
+- `system/lungFlows`, included by `system/controlDict`, records at every time
+  step the flow rate and the area-averaged pressure through the inlet, each
+  lung and each outlet, in
+  `postProcessing/fluid/{inlet,LPA,RPA,outlet<N>}{Flow,Pressure}`. The
+  pressure is kinematic (p/rho, m²/s²), and the inlet flow is negative. With
+  the compliant wall, `inletFlow + LPAFlow + RPAFlow` is minus the rate the
+  lumen fills (dV/dt), not an error; `extract_results.py` subtracts dV/dt
+  (from `fluidMetrics`) to get the mass-balance error.
+
+Every case also includes `system/fluidMetrics`, a coded function object that
+OpenFOAM compiles into `dynamicCode/` on the first run. At every time step it
+writes the fluid volume, kinetic energy, viscous dissipation rate
+(∫ 2 νEff D:D dV), helicity (∫ U·ω dV and ∫ |U·ω| dV) and peak |U| to
+`postProcessing/fluid/fluidMetrics/<startTime>/fluidMetrics.dat`. Everything is
+per unit density, so multiply by rho for energies in J and power in W;
+the dissipation rate integrated over a cycle is the viscous energy loss. Beside
+it, `fluidEnergyFlux.dat` has the rate energy leaves the fluid through each
+patch: ∫ (p + |U|²/2) φ through the inlet (negative) and outlets, and the
+pressure work ∫ p φ_mesh on the moving wall. Inflow minus outflow minus wall
+work is then dissipation plus the change in kinetic energy, which
+`extract_results.py` checks (`energyBudgetResidual_fraction`; about 1% on a
+coarse channel test, from the corner where the uniform inlet meets the wall).
 
 After a run, `pythonScripts/lung_flow_split.py RUN_CASE...` reports for the
 last complete cycle:
@@ -532,6 +580,141 @@ they are scaled with `transformPoints -scale`, by `--scale-factor` (default
 unscaled. Only the run-case copies are scaled; the meshes in `caseFiles/` keep
 the STL units.
 
+## Results
+
+`pythonScripts/extract_results.py RUN_CASE...` (run it with the `fsi-env`
+Python) reads a finished run case in place, decomposed or reconstructed, and
+writes its results to `results/<case>/`:
+
+| File | Contents |
+| --- | --- |
+| `metadata.json` | provenance: `meshing.params`, cycle period, density, solver versions, the last-cycle window, how TAWSS/OSI were computed, warnings |
+| `timeseries.csv` | every time step of every cycle: inlet, lung and outlet flow (mL/s) and pressure (mmHg), fluid volume, kinetic energy, dissipation, helicity, FSI iterations |
+| `summary.json` | the scalar results below |
+| `pv_inlet.csv` | last cycle: inlet pressure, inflow, volume ejected so far, and lumen volume of the 3D model (for the pressure-volume curves) |
+| `wall_cycleAvg.vtp` | last-cycle fields on the undeformed wall: TAWSS, OSI, RRT, ECAP, mean WSS vector, mean and amplitude of pressure, displacement (mean, max, cyclic), peak-systolic WSS, pressure and displacement |
+| `wall_phases.pvd`, `wall_phases/` | the wall at every 4th write time of the last cycle (`--phase-stride`) and at peak systole and end-diastole: WSS, pressure, displacement |
+| `solid_{innerWall,outerWall}_{peakSystole,endDiastole}.vtp` | the solid wall surfaces: D, sigmaEq, sigma, largest principal Green strain |
+| `setup/`, `logs/` | the case's input dictionaries, and its logs gzipped |
+
+It also adds the case's row to `results/summary.csv`, one row per case,
+replacing any earlier row for the same case. The scalars are, over the last
+cycle: systolic, diastolic, mean and pulse pressure at the inlet, each lung and
+each outlet; mean and peak flow and reverse-flow fraction; the LPA share of the
+flow (mean and at peak systole); mass-balance error; inlet resistance and the
+mean pressure drop to each lung; viscous energy loss; kinetic energy and
+helicity; fluid stroke volume; area-weighted TAWSS and OSI statistics and the
+area fractions with low TAWSS (< 0.4 Pa), high OSI (> 0.2) and high ECAP
+(> 1.4 /Pa) (thresholds set by `--low-tawss`, `--high-osi`, `--high-ecap`);
+wall displacement; wall stress and cyclic strain; FSI iterations; and how
+periodic the last cycle is (largest change from the cycle before, relative to
+the range). Column names carry their units.
+
+Hydraulic power at the inlet: total power (1/T)∫ p Q dt, steady power
+(mean p × mean Q) and their difference, the oscillatory power, with
+`oscillatoryPowerFraction` = oscillatory / total (about 23% has been measured
+in human pulmonary arteries); stroke work (total power × T); work per stroke
+volume (the flow-weighted mean inlet pressure); and the viscous energy loss
+as a fraction of stroke work. From `fluidEnergyFlux.dat` (cases set up after
+it was added): total power including the kinetic term, the shares of the
+inflowing energy that reach the outlets, the wall and dissipation, and the
+energy-budget residual. `massBalanceError` takes off the rate the lumen fills
+(dV/dt, from `fluidMetrics`), and `netStorage_fractionOfInflow` is the net
+filling over the cycle (0 when periodic).
+
+`baseline_*` columns are the same power measures for the case's outlet
+Windkessels alone, with no 3D arteries: the per-outlet RCR models in
+`0/fluid/windkesselOutlets` in parallel, driven by the case's inflow.
+`oscillatoryPowerFraction_minusBaseline` is then what the 3D compliant
+arteries add, which is what should be compared between species: with prescribed
+inflow, the inlet power is set by the downstream load, so most of a difference
+between species in the raw fraction comes from the inflow waveforms and the
+Windkessel parameters (with the template defaults the Windkessels alone give
+0.27 for human and 0.11 for pig).
+
+If the solver restarted during the last cycle, the upstream OSI function object
+restarted its running integrals from zero; the copy in this repository
+(`oscillatoryShearIndex/`, built by `Allwmake`) reads them back. The
+integral of |WSS| can only grow, so `extract_results.py` tells the two apart by
+whether it fell across the restart: if it was reset inside the cycle, TAWSS and
+OSI come from the snapshots instead, with a warning; a reset exactly at the
+cycle start is handled; and integrals that carried on are used as normal.
+
+Periodicity: `cycles.csv` has one row per beat (mean, systolic and diastolic
+pressures, flows, the change in outlet pressure and lumen volume over the beat,
+energy loss, FSI iterations; and, where both ends of a beat were written, its
+TAWSS and OSI and how much their maps changed from the beat before, and the
+inner-wall stress). `periodic` in the summary is true when the largest
+beat-to-beat change of the last beat is within `--periodic-tol` (1% of the
+waveform range) and the inlet mean pressure changed by less than
+`--periodic-mean-tol` (0.5%); otherwise there is a warning. With three or more
+beats, the decay per beat of the inlet mean pressure (`settle_ratioPerBeat`,
+compare with the Windkessel's `windkessel_decayPerBeat` = `exp(-T / (R C))`)
+gives an estimate of the error left (`settle_remaining_p_inlet_mmHg`) and of
+the beats still needed (`settle_beatsNeeded`).
+
+`python3 pythonScripts/plot_results.py` (system Python with matplotlib) writes
+`results/plots/`: inlet pressure against ejected volume (the ejection limb of a
+right-ventricular PV loop; the area under it is the work per beat), inlet
+pressure against the lumen volume of the 3D arteries (a loop whose slope is
+their compliance), and each case's oscillatory power fraction against its
+Windkessel-only baseline, coloured and line-styled by species. `--normalise`
+divides volumes by stroke volume; `--cases` picks cases.
+
+Peak systole is the time of peak inflow and end-diastole that of the lowest
+inlet pressure. Pressures and wall shear stresses are kinematic in the solver
+and are multiplied by rho from `constant/fluid/transportProperties`. TAWSS and
+OSI are exact when write times fall on both ends of the last cycle, as
+`meshing.sh` arranges (see Inlet flow rate); otherwise they come from the WSS
+snapshots and `metadata.json` says so. OpenFOAM's wall shear stress points
+against the near-wall flow, so the mean WSS vector does too.
+
+The files are float32 and the phases are thinned, so a case takes roughly
+100-250 MB; the full last cycle stays in the archived run case. `results/` is
+ignored by Git, like `run/`.
+
+## Archiving finished runs
+
+Once its results are extracted, `pythonScripts/archive_run.py RUN_CASE...`
+moves a finished run case to the HDD, keeping only its last cycle. It writes
+`/mnt/backup/$USER/fsiRuns/<case>.tar.zst` (`--archive-dir`) and a
+`<case>.manifest.json` beside it listing every file, the kept times and the
+archive's sha256. The archive holds the reconstructed case: the setup files
+and logs, `constant/`, `system/`, `0/`, the last cycle's time directories (both
+ends), `postProcessing/` with every cycle, the set-up and logs of `prestress/`
+and `windkessel/`, and the top-level files of the meshing directory (STL,
+centerlines, profiles) under `meshing/`. It leaves out the processor
+directories, `dynamicCode/` and any earlier cycles, and drops fields that only
+a restart needs or that can be recomputed from what is kept (`Uf`, `meshPhi`,
+`cellMotionU`, `pointMotionU`, `F_`, `Ff_`, `sigmaHyd`, `*_0`; about 45% of each
+time directory; `--keep-all-fields` keeps them). The archive is not meant for
+restarting the run, but `extract_results.py` runs on it unpacked and gives the
+same results.
+
+Before writing it checks that the run reached `endTime` (`--allow-incomplete`),
+that no Slurm job of yours is running in the case and its solver log has not
+changed in the last 15 minutes (`--quiet-minutes`, `--force-active`; this
+catches jobs submitted from another directory), and that `results/<case>/` was
+extracted from this case after it finished (`--skip-results-check`). Symlinks
+inside the case (solids4foam's `fsiProperties`, `0/fluid`, ...) are archived as
+the files they point to. It will not replace an archive that holds a
+different case of the same name. Any last-cycle times
+that are not yet reconstructed (Allrun reconstructs at the end, so only if the
+job died before that) are reconstructed with `reconstructPar`. The archive is
+written under a temporary name and listed back, every file's size compared,
+before it takes the final name, so `--force` never replaces a good archive
+with a bad one. The archive's path and checksum are added to
+`results/<case>/metadata.json`. Only then is the run case deleted: after a
+prompt, straight away with `--delete`, or never with `--keep`. `--dry-run`
+reports the files, size and free space without writing anything (if times
+would need reconstructing, it says so and leaves them out of the size). The meshing
+directory (`caseFiles/<case>`) is not deleted.
+
+The free space it checks is the disk's, not your quota on it (`quota -s`).
+
+    .env/fsi-env/bin/python pythonScripts/extract_results.py run/<case>
+    python3 pythonScripts/archive_run.py run/<case>
+
 ## What is version-controlled
 
 - `geometries/`: input STL surfaces, in `human/` and `porcine/`
@@ -544,7 +727,8 @@ the STL units.
 - `environment.yml`: the Python dependency specification
 
 The local Conda installation and environment (`.env/`), intermediate meshing
-files (`caseFiles/`), and assembled solver cases (`run/`) are generated locally
+files (`caseFiles/`), assembled solver cases (`run/`) and extracted results
+(`results/`) are generated locally
 and ignored by Git. These directories are large, machine-specific, or
 reproducible from the tracked inputs.
 

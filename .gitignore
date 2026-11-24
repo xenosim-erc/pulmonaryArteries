@@ -93,6 +93,8 @@ SunOS*Gcc*/
 !/fsiScript/caseFiles/.ignorethisfile
 /fsiScript/run/*
 !/fsiScript/run/.ignorethisfile
+/fsiScript/results/*
+!/fsiScript/results/.ignorethisfile
 
 # Extra test geometries and their archives; large, kept locally only. The
 # original h02/h08/p01/p02/p16 surfaces stay tracked.

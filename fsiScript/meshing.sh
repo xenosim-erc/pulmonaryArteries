@@ -161,9 +161,10 @@ if [[ $# -eq 0 ]]; then
     echo "       [--wk-proximal-resistance VALUE] [--wk-distal-resistance VALUE]" >&2
     echo "       [--wk-compliance VALUE] [--flow-split-exponent VALUE]" >&2
     echo "       [--compliance-pressure-step MMHG] [--no-compliance-correction]" >&2
+    echo "       [--wk-start settled|imaging]" >&2
     echo "       [--left-axis +x|-x|+y|-y|+z|-z] [--lung-sides FILE]" >&2
     echo "       [--animal human|pig] [--inlet-flow NAME|FILE]" >&2
-    echo "       [--heartbeats N] [--cores N]" >&2
+    echo "       [--heartbeats N] [--cycle-snapshots N] [--cores N]" >&2
     echo "       [--wall-model neoHookeanElastic|isotropicFungElastic]" >&2
     echo "       [--wall-density VALUE] [--wall-youngs-modulus VALUE]" >&2
     echo "       [--wall-poisson-ratio VALUE] [--wall-fung-c VALUE]" >&2
@@ -197,6 +198,10 @@ flow_split_exponent="2"
 # The FSI wall carries part of the measured whole-bed compliance; it is taken
 # off the Windkessel compliance unless --no-compliance-correction.
 compliance_correction="yes"
+# Outlet compliance pressure at t = 0: "settled" is the pressure the Windkessel
+# settles to at the start of a beat under the inflow waveform, so the run
+# starts nearly periodic; "imaging" is the imaging (prestress) pressure.
+wk_start="settled"
 # Lung of each outlet: automatic from the centerlines, with the patient's left
 # along --left-axis (+x in DICOM LPS coordinates), or from a "name,side" file.
 left_axis="+x"
@@ -205,6 +210,9 @@ compliance_pressure_step=""
 animal=""
 inlet_flow=""
 heartbeats=""
+# Fields are written this many times per cardiac cycle, and only the last
+# cycle is kept (purgeWrite), so last-cycle averages can be taken exactly.
+cycle_snapshots="40"
 cores=""
 cells_per_radius="3.0"
 sphere_radius_factor="4.0"
@@ -392,6 +400,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
         --no-compliance-correction)
             compliance_correction="no"
             ;;
+        --wk-start)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --wk-start requires a value" >&2
+                exit 2
+            }
+            wk_start="${arguments[$index]}"
+            ;;
+        --wk-start=*)
+            wk_start="${argument#*=}"
+            ;;
         --left-axis)
             index=$((index + 1))
             [[ $index -lt ${#arguments[@]} ]] || {
@@ -435,6 +454,17 @@ for ((index = 1; index < ${#arguments[@]}; index++)); do
             ;;
         --heartbeats=*)
             heartbeats="${argument#*=}"
+            ;;
+        --cycle-snapshots)
+            index=$((index + 1))
+            [[ $index -lt ${#arguments[@]} ]] || {
+                echo "Error: --cycle-snapshots requires a value" >&2
+                exit 2
+            }
+            cycle_snapshots="${arguments[$index]}"
+            ;;
+        --cycle-snapshots=*)
+            cycle_snapshots="${argument#*=}"
             ;;
         --cores)
             index=$((index + 1))
@@ -960,6 +990,22 @@ require_positive_number "$cycle_period" "the cycle length in $inlet_flow_file"
 end_time="$(awk -v n="$heartbeats" -v t="$cycle_period" 'BEGIN { printf "%.10g", n * t }')"
 echo "Heartbeats: $heartbeats x ${cycle_period} s, endTime $end_time"
 
+# Write fields cycle_snapshots times per cycle and keep only the newest
+# cycle_snapshots + 1 time directories: the whole last cycle, both ends
+# included. The wall-shear function objects write at the same times, so the
+# accumulated WSS fields at the two ends give last-cycle TAWSS and OSI.
+case "$wk_start" in
+    settled|imaging) ;;
+    *) echo "Error: --wk-start must be settled or imaging, not '$wk_start'" >&2; exit 2 ;;
+esac
+if ! [[ "$cycle_snapshots" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --cycle-snapshots must be a positive integer, not '$cycle_snapshots'" >&2
+    exit 2
+fi
+write_interval="$(awk -v t="$cycle_period" -v n="$cycle_snapshots" 'BEGIN { printf "%.10g", t / n }')"
+purge_write=$((cycle_snapshots + 1))
+echo "Field writes: every $write_interval s ($cycle_snapshots per cycle), last cycle kept"
+
 # Both regions are decomposed into the same number of subdomains, and the
 # Slurm job asks for one task per subdomain.
 if [[ -z "$cores" ]]; then
@@ -1043,10 +1089,10 @@ passthrough_arguments=()
 for ((index = 1; index < ${#arguments[@]}; index++)); do
     argument="${arguments[$index]}"
     case "$argument" in
-        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes|--wall-layers|--max-cell-size)
+        --coupling|--scale-factor|--wk-proximal-resistance|--wk-distal-resistance|--wk-compliance|--flow-split-exponent|--species|--animal|--inlet-flow|--left-axis|--lung-sides|--compliance-pressure-step|--heartbeats|--cycle-snapshots|--wk-start|--cores|--gaussian-sigma|--extrusion-percentage|--cells-per-radius|--sphere-radius-factor|--thickness-smoothing-passes|--max-mapping-distance|--maximum-refinement-levels|--wall-density|--wall-youngs-modulus|--wall-poisson-ratio|--wall-model|--wall-fung-c|--wall-fung-a|--wall-bulk-modulus|--prestress-pressure|--prestress-tolerance-fraction|--prestress-max-passes|--prestress-pressure-step|--saddle-dilation|--saddle-iterations|--normal-smoothing-passes|--wall-layers|--max-cell-size)
             index=$((index + 1))
             ;;
-        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*|--wall-layers=*|--max-cell-size=*)
+        --coupling=*|--scale-factor=*|--wk-proximal-resistance=*|--wk-distal-resistance=*|--wk-compliance=*|--flow-split-exponent=*|--species=*|--animal=*|--inlet-flow=*|--left-axis=*|--lung-sides=*|--compliance-pressure-step=*|--no-compliance-correction|--heartbeats=*|--cycle-snapshots=*|--wk-start=*|--cores=*|--gaussian-sigma=*|--extrusion-percentage=*|--cells-per-radius=*|--sphere-radius-factor=*|--thickness-smoothing-passes=*|--max-mapping-distance=*|--maximum-refinement-levels=*|--wall-density=*|--wall-youngs-modulus=*|--wall-poisson-ratio=*|--wall-model=*|--wall-fung-c=*|--wall-fung-a=*|--wall-bulk-modulus=*|--prestress-pressure=*|--prestress-tolerance-fraction=*|--prestress-max-passes=*|--prestress-pressure-step=*|--no-prestress|--saddle-dilation=*|--saddle-iterations=*|--normal-smoothing-passes=*|--wall-layers=*|--max-cell-size=*)
             ;;
         # Forwarded to Python, but already shown in the settings summary.
         --output-dir|--prefix)
@@ -1111,12 +1157,14 @@ print_settings() {
         "Mesh scale factor:" "$scale_factor" \
         "Animal:" "${animal:-none, values set by hand} (inlet flow: $inlet_flow_source)" \
         "Heartbeats:" "$heartbeats x $cycle_period s (endTime $end_time)" \
+        "Field writes:" "$cycle_snapshots per cycle (every $write_interval s), purgeWrite $purge_write" \
         "Cores:" "$cores" \
         "Windkessel Rp [Pa s/m^3]:" "$wk_proximal_resistance" \
         "Windkessel Rd [Pa s/m^3]:" "$wk_distal_resistance" \
         "Windkessel C [m^3/Pa]:" "$wk_compliance (whole bed)" \
         "3D-wall compliance taken off:" "$compliance_correction$( [[ "$compliance_correction" == yes ]] && printf ' (measured at run time, imaging pressure +%s mmHg)' "$compliance_pressure_step")" \
         "Flow-split exponent:" "$flow_split_exponent" \
+        "Outlet start pressure:" "$( [[ "$wk_start" == settled ]] && echo "settled (periodic Windkessel pressure at the start of a beat)" || echo "imaging pressure" )" \
         "Lung sides:" "${lung_sides_file:-automatic, patient left along $left_axis}" \
         "Wall:" "$wall_summary" \
         "Imaging pressure:" "$prestress_pressure mmHg ($prestress_pressure_pa Pa)" \
@@ -1827,6 +1875,33 @@ if ! grep -Eq "^[[:space:]]*endTime[[:space:]]+$end_time;" "$run_control_dict"; 
 fi
 echo "Set endTime to $end_time s ($heartbeats heartbeat(s))"
 
+sed -i -E \
+    -e "s/^(writeInterval[[:space:]]+)[^;]*;/\1$write_interval;/" \
+    -e "s/^(purgeWrite[[:space:]]+)[^;]*;/\1$purge_write;/" \
+    "$run_control_dict"
+if ! grep -Eq "^writeInterval[[:space:]]+$write_interval;" "$run_control_dict" ||
+   ! grep -Eq "^purgeWrite[[:space:]]+$purge_write;" "$run_control_dict"; then
+    echo "Error: could not set writeInterval/purgeWrite in $run_control_dict" >&2
+    exit 1
+fi
+echo "Set writeInterval to $write_interval s, purgeWrite $purge_write"
+
+# OpenFOAM writes at the time step nearest each write time, so when the write
+# interval is not a whole number of time steps half the snapshots land half a
+# step early. Cycle ends stay exact (the cycle is a whole number of steps),
+# but say so, and suggest snapshot counts that divide evenly.
+run_delta_t="$(sed -n -E 's/^deltaT[[:space:]]+([^;]+);.*/\1/p' "$run_control_dict" | head -n 1)"
+if [[ -n "$run_delta_t" ]] &&
+   ! awk -v t="$cycle_period" -v n="$cycle_snapshots" -v d="$run_delta_t" \
+        'BEGIN { s = t / (n * d); exit !(s - int(s + 0.5) < 1e-6 && int(s + 0.5) - s < 1e-6) }'; then
+    even_counts="$(awk -v t="$cycle_period" -v n="$cycle_snapshots" -v d="$run_delta_t" 'BEGIN {
+        for (k = n - 15; k <= n + 15; k++) if (k > 0) { s = t / (k * d)
+            if (s - int(s + 0.5) < 1e-6 && int(s + 0.5) - s < 1e-6) printf "%s%d", (c++ ? " " : ""), k } }')"
+    echo "Note: $write_interval s is not a whole number of time steps (deltaT $run_delta_t s): writes" \
+         "inside the cycle land up to half a step early. --cycle-snapshots giving whole steps:" \
+         "${even_counts:-none near $cycle_snapshots}" >&2
+fi
+
 for decompose_dict in "$run_case"/system/decomposeParDict \
                       "$run_case"/system/{fluid,solid}/decomposeParDict \
                       "$run_case"/prestress/system/decomposeParDict; do
@@ -1855,6 +1930,10 @@ fi
 # Split the Windkessel totals across the outlets by area. The fragment is
 # the only definition of the outlet conditions, included by 0/fluid/p.
 windkessel_file="$run_case/0/fluid/windkesselOutlets"
+settled_start_arguments=()
+if [[ "$wk_start" == "settled" ]]; then
+    settled_start_arguments=(--settled-start "$run_case/constant/fluid/inletFlow/$inlet_flow_file")
+fi
 echo "Splitting the Windkessel totals across the outlets..."
 "$FSI_PYTHON" "$WINDKESSEL_SCRIPT" "$profiles_csv" "$windkessel_file" \
     --proximal-resistance "$wk_proximal_resistance" \
@@ -1863,6 +1942,7 @@ echo "Splitting the Windkessel totals across the outlets..."
     --exponent "$flow_split_exponent" \
     --transport-properties "$run_case/constant/fluid/transportProperties" \
     --initial-pressure "$prestress_pressure_pa" \
+    "${settled_start_arguments[@]}" \
     | tee "$run_case/log.windkesselOutlets"
 
 # The compliance C above is measured for the whole pulmonary bed, which
@@ -1892,6 +1972,9 @@ if [[ "$compliance_correction" == "yes" ]]; then
         echo "wholeBedCompliance=$wk_compliance   # m^3/Pa, before the 3D wall is taken off"
         echo "flowSplitExponent=$flow_split_exponent"
         echo "initialPressure=$prestress_pressure_pa   # Pa"
+        if [[ "$wk_start" == "settled" ]]; then
+            echo "settledStartWaveform=constant/fluid/inletFlow/$inlet_flow_file   # start the outlets settled"
+        fi
     } > "$run_case/windkessel/settings"
     compliance_note="whole bed $wk_compliance m^3/Pa for now; Allrun takes off the 3D wall's, measured from $prestress_pressure mmHg to +$compliance_pressure_step mmHg"
     echo "Outlet compliance: $compliance_note"
