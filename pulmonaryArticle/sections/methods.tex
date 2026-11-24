@@ -279,7 +279,7 @@ The coupled problem was solved with the finite-volume toolbox solids4foam \citep
 The two domains were coupled with a partitioned, strongly coupled Robin--Neumann scheme \citep{tukovic2019added}.
 This coupling scheme proved to be effective for dealing with the strong added mass effect present in arterial simulations as the solid and fluid densities are similar without any under-relaxation.
 The fluid side boundary conditions are set by the kinematic condition (\cref{eq:fluidBC}), wherein the fluid velocity and displacement are set equal to the solid velocity and displacement.
-The displacement is updated by solving a laplacian mesh motion equation with a quadratic inverse distance diffusivity.
+The displacement is updated by solving a Laplacian mesh motion equation for the velocity with the diffusivity scaled by quadratic inverse distance from the boundary.
 \begin{equation}
   \vect{v}_{f,i} = \vect{v}_{s,i}
   \qquad
@@ -289,18 +289,18 @@ The displacement is updated by solving a laplacian mesh motion equation with a q
 where $\vect{v}_{f,i}$ is the fluid velocity at the interface, $\vect{v}_{s,i}$ is the solid velocity at the interface, $\vect{u}_{f,i}$ is the fluid displacement at the interface, $\vect{u}_{s,i}$ is the solid displacement at the interface.
 An additional Robin interface condition for pressure is obtained through approximating the fluid pressure by the solid inertia (\cref{eq:robinBC}).
 \begin{equation}
-  p^{k} + \frac{\rho_s h_s}{\rho_f} \left(\frac{\partial p}{\partial n}\right)^{k} = p^{\left(k-1\right)} - \rho_s h_s \left(\frac{\partial \vect{v}_{s,n}}{\partial t}\right)^{\left(k-1\right)}
+  p^{k} + \frac{\rho_s h_s}{\rho_f} \left(\frac{\partial p}{\partial n}\right)^{k} = p^{\left(k-1\right)} - \rho_s h_s \left(\frac{\partial {v}_{s,n}}{\partial t}\right)^{\left(k-1\right)}
   \label{eq:robinBC}
 \end{equation}
-where $p$ is the fluid pressure, $\rho_s h_s$ is the Robin coefficient and approximates solid impedance, $\rho_f$ is the fluid density and $\frac{\partial \vect{v}_{s,n}}{\partial t}$ is the solid normal acceleration.
+where $k$ is the FSI iteration counter, $p$ is the fluid pressure, $n$ is the interface unit normal, $\rho_s h_s$ is the Robin coefficient and approximates solid impedance, $\rho_f$ is the fluid density and $\frac{\partial \vect{v}_{s,n}}{\partial t}$ is the solid normal acceleration.
 The Robin coefficient is approximated using the \textit{secant} method whereby the solid impedance is approximated by comparing changes in interface pressure with changes in solid/fluid normal acceleration.
-This is updated every FSI iteration in order to maximise rate of convergence over the worst-case of the observed modes.
+This is updated every FSI iteration in order to maximise rate of convergence over the worst-case of the observed modes. \todo{cite formulation}
 For the solid interface conditions, the traction calculated on the fluid side is applied as a boundary condition for the solid.
 \begin{equation}
-   \sigma_{s} \cdot n = \sigma_{f} \cdot n
+   \tens{\sigma}_{s} \cdot \vect{n} = \tens{\sigma}_{f} \cdot \vect{n}
   \label{eq:solidBC}
 \end{equation}
-where 
+where $\tens{\sigma}_{s}$ and $\tens{\sigma}_{f}$ are the solid and fluid Cauchy stress tensors at the interface.
 Coupling iterations within a time step were repeated until the relative interface residual fell below \num{1e-5}, with at most 30 iterations per step.
 
 The fluid equations were solved with the PIMPLE algorithm (20 outer and 3 pressure correctors), with second-order linear-upwind interpolation for convection and first-order implicit Euler time integration.
