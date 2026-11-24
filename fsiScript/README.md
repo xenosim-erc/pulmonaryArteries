@@ -632,8 +632,9 @@ between species in the raw fraction comes from the inflow waveforms and the
 Windkessel parameters (with the template defaults the Windkessels alone give
 0.27 for human and 0.11 for pig).
 
-If the solver restarted during the last cycle, the original OSI function object
-restarted its running integrals from zero (later builds read them back). The
+If the solver restarted during the last cycle, the upstream OSI function object
+restarted its running integrals from zero; the copy in this repository
+(`oscillatoryShearIndex/`, built by `Allwmake`) reads them back. The
 integral of |WSS| can only grow, so `extract_results.py` tells the two apart by
 whether it fell across the restart: if it was reset inside the cycle, TAWSS and
 OSI come from the snapshots instead, with a warning; a reset exactly at the

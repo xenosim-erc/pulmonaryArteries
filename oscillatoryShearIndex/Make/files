@@ -1,0 +1,3 @@
+oscillatoryShearIndex.C
+
+LIB = $(FOAM_USER_LIBBIN)/liboscillatoryShearIndex
