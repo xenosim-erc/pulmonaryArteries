@@ -44,8 +44,11 @@ solvers
             //ksp_max_it "500";
 
 
-            pc_type bjacobi;
-            sub_pc_type lu;
+            // Algebraic multigrid: in a 100-step benchmark on h08 (180k solid cells)
+            // it halved the linear iterations of bjacobi/LU and made each FSI step
+            // 1.75x faster (fsiScript/run/benchmark, 2026-11-25)
+            pc_type hypre;
+            pc_hypre_type boomeramg;
 
             snes_lag_preconditioner_persists true;
             snes_lag_preconditioner "-2";
