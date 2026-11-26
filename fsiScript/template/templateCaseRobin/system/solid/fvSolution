@@ -44,11 +44,23 @@ solvers
             //ksp_max_it "500";
 
 
-            // Algebraic multigrid: in a 100-step benchmark on h08 (180k solid cells)
-            // it halved the linear iterations of bjacobi/LU and made each FSI step
-            // 1.75x faster (fsiScript/run/benchmark, 2026-11-25)
+            // Algebraic multigrid, with the Dirichlet template's tuned options. In
+            // 100-step benchmarks on h08 (180k solid cells, Fung + prestress, 16
+            // cores): bjacobi/LU 100 s/step, plain BoomerAMG 55, these 37
+            // (fsiScript/run/benchmark and benchmark2, 2026-11-25)
             pc_type hypre;
             pc_hypre_type boomeramg;
+            pc_hypre_boomeramg_max_iter "1";
+            pc_hypre_boomeramg_strong_threshold "0.5";
+            pc_hypre_boomeramg_grid_sweeps_up "1";
+            pc_hypre_boomeramg_grid_sweeps_down "1";
+            pc_hypre_boomeramg_agg_nl "1";
+            pc_hypre_boomeramg_agg_num_paths "1";
+            pc_hypre_boomeramg_max_levels "25";
+            pc_hypre_boomeramg_coarsen_type HMIS;
+            pc_hypre_boomeramg_interp_type ext+i;
+            pc_hypre_boomeramg_P_max "1";
+            pc_hypre_boomeramg_truncfactor "0.3";
 
             snes_lag_preconditioner_persists true;
             snes_lag_preconditioner "-2";
