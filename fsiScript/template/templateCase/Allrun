@@ -85,7 +85,8 @@ then
         --exponent "$flowSplitExponent" \
         --transport-properties constant/fluid/transportProperties \
         --initial-pressure "$initialPressure" \
-        ${settledStartWaveform:+--settled-start "$settledStartWaveform"} \
+        ${settledStartWaveform:+--settled-start "$settledStartWaveform" \
+            --wall-compliance "$wallCompliance" --wall-pressure "$initialPressure"} \
         >> log.windkesselOutlets 2>&1
     then
         cat log.windkesselOutlets >&2

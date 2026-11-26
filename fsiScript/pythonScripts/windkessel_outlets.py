@@ -28,6 +28,14 @@ Windkessel settles to at the start of a beat when driven by that inflow, not
 at --initial-pressure: the compliance charge is the slowest part of the
 model to settle (time constant Rd C, so a starting error shrinks only by
 exp(-T / (Rd C)) per beat), and starting it settled leaves little to settle.
+When the 3D wall's compliance has been taken off C (--wall-compliance, with
+the pressure the wall starts at, --wall-pressure), the model is two
+compliances: the wall's at the inlet, then Rp, then the outlets' and Rd. The
+wall then starts at its own pressure (the imaging pressure, where the
+prestressed wall is in equilibrium), and the outlets start where the total
+charge on both compliances equals that of the settled state; the small
+imbalance between the two evens out within a fraction of a beat (time
+constant about Rp Cwall Cout / (Cwall + Cout)).
 
 The result is written as a dictionary fragment of per-outlet patch entries,
 which the template's 0/fluid/p includes. That include is the only definition
@@ -130,6 +138,53 @@ def settled_start_pressure(rows, distal_resistance: float, compliance: float, st
     return p / (1.0 - math.exp(-period / tau))
 
 
+def settled_start_two_compliances(rows, rp: float, rd: float, c_out: float, c_wall: float,
+                                  p_wall: float, steps: int = 20000) -> tuple[float, float, float]:
+    """Outlet start pressure for the wall + outlet compliance model
+        Cwall dp1/dt = Q - (p1 - p2)/Rp,   Cout dp2/dt = (p1 - p2)/Rp - p2/Rd,
+    so that, with the wall starting at p_wall, the total charge
+    Cwall p1 + Cout p2 equals that of the periodic state. Returns
+    (outlet start, periodic p1, periodic p2) at the start of a beat. The
+    equations are linear: one beat maps the state x to A x + b, found by
+    integrating from zero and from the two unit states (RK4), and the
+    periodic state solves (I - A) x = b."""
+    import bisect
+    times = [r[0] for r in rows]
+    t0, period = rows[0][0], rows[-1][0] - rows[0][0]
+    dt = period / steps
+
+    def flow(t):
+        i = min(max(bisect.bisect_right(times, t) - 1, 0), len(rows) - 2)
+        (ta, qa), (tb, qb) = rows[i], rows[i + 1]
+        return qa + (qb - qa) * (t - ta) / (tb - ta) if tb > ta else qa
+
+    def beat(p1, p2, forced):
+        def f(t, a, b):
+            q = flow(t) if forced else 0.0
+            qo = (a - b) / rp
+            return (q - qo) / c_wall, (qo - b / rd) / c_out
+        for i in range(steps):
+            t = t0 + i * dt
+            k1 = f(t, p1, p2)
+            k2 = f(t + dt / 2, p1 + dt / 2 * k1[0], p2 + dt / 2 * k1[1])
+            k3 = f(t + dt / 2, p1 + dt / 2 * k2[0], p2 + dt / 2 * k2[1])
+            k4 = f(t + dt, p1 + dt * k3[0], p2 + dt * k3[1])
+            p1 += dt / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0])
+            p2 += dt / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1])
+        return p1, p2
+
+    b = beat(0.0, 0.0, True)
+    a1 = beat(1.0, 0.0, False)
+    a2 = beat(0.0, 1.0, False)
+    # (I - A) x = b, A = [[a1[0], a2[0]], [a1[1], a2[1]]]
+    m11, m12, m21, m22 = 1 - a1[0], -a2[0], -a1[1], 1 - a2[1]
+    det = m11 * m22 - m12 * m21
+    x1 = (b[0] * m22 - m12 * b[1]) / det
+    x2 = (m11 * b[1] - m21 * b[0]) / det
+    outlet = (c_wall * x1 + c_out * x2 - c_wall * p_wall) / c_out
+    return max(outlet, 0.0), x1, x2
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profiles_csv", type=Path)
@@ -174,6 +229,17 @@ def parse_args() -> argparse.Namespace:
             "inletFlow format), instead of --initial-pressure"
         ),
     )
+    parser.add_argument(
+        "--wall-compliance", type=positive_float,
+        help=(
+            "with --settled-start: compliance of the 3D wall [m^3/Pa], already taken "
+            "off --compliance; the settled start then accounts for it"
+        ),
+    )
+    parser.add_argument(
+        "--wall-pressure", type=float,
+        help="with --wall-compliance: pressure the 3D wall starts at [Pa] (the imaging pressure)",
+    )
     return parser.parse_args()
 
 
@@ -193,11 +259,23 @@ def main() -> int:
         if abs(rows[0][1]) > 1e-3 * max(abs(q) for _, q in rows):
             print(f"Warning: the inflow at t = {rows[0][0]:g} is not zero, so the outlet pressure at the "
                   "start also has an Rp Q part, which this does not include", file=sys.stderr)
-        settled = settled_start_pressure(rows, args.distal_resistance, args.compliance)
-        print(f"Settled start: {settled:.6g} Pa ({settled / 133.322387415:.3g} mmHg), from "
-              f"{args.settled_start.name} (period {rows[-1][0] - rows[0][0]:g} s, "
-              f"Rd C = {args.distal_resistance * args.compliance:.3g} s), instead of "
-              f"{args.initial_pressure:g} Pa")
+        if args.wall_compliance is not None:
+            if args.wall_pressure is None:
+                raise ValueError("--wall-compliance needs --wall-pressure")
+            settled, x1, x2 = settled_start_two_compliances(
+                rows, args.proximal_resistance, args.distal_resistance, args.compliance,
+                args.wall_compliance, args.wall_pressure)
+            print(f"Settled start (3D wall {args.wall_compliance:.4g} m^3/Pa + outlets "
+                  f"{args.compliance:.4g} m^3/Pa): periodic state {x1 / 133.322387415:.3g} mmHg "
+                  f"in the wall, {x2 / 133.322387415:.3g} mmHg at the outlets; the wall starts at "
+                  f"{args.wall_pressure / 133.322387415:.3g} mmHg, so the outlets start at "
+                  f"{settled:.6g} Pa ({settled / 133.322387415:.3g} mmHg) for the same total charge")
+        else:
+            settled = settled_start_pressure(rows, args.distal_resistance, args.compliance)
+            print(f"Settled start: {settled:.6g} Pa ({settled / 133.322387415:.3g} mmHg), from "
+                  f"{args.settled_start.name} (period {rows[-1][0] - rows[0][0]:g} s, "
+                  f"Rd C = {args.distal_resistance * args.compliance:.3g} s), instead of "
+                  f"{args.initial_pressure:g} Pa")
         args.initial_pressure = settled
         start_note = f"settled start from {args.settled_start.name}"
     initial_value = args.initial_pressure / rho
