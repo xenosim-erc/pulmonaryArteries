@@ -249,8 +249,10 @@ prestress_pressure_step="1"
 saddle_dilation=""
 saddle_iterations=""
 normal_smoothing_passes=""
-# Cells across the solid wall (nLayers of varExtrudeMesh)
-wall_layers="3"
+# Cells across the solid wall (nLayers of varExtrudeMesh). 5 from the h08
+# solid mesh study (2026-11-26): about 1% below the layer limit in inner-wall
+# displacement, against about 2% for 3 layers
+wall_layers="5"
 # cfMesh maxCellSize of the fluid mesh, in the units of the input STL (before
 # --scale-factor); empty keeps the value in the meshDict template
 max_cell_size=""

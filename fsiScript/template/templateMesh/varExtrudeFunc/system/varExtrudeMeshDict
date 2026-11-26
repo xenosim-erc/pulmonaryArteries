@@ -47,7 +47,7 @@ maxNormalTilt       45;
 // The private utility uses this model for nLayers and sumThickness(), but
 // replaces its constant geometric thickness with distanceField at each point.
 extrudeModel        linearNormal;
-nLayers             3;
+nLayers             5;
 expansionRatio      1.0;
 
 linearNormalCoeffs
